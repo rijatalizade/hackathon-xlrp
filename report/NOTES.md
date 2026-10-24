@@ -68,6 +68,16 @@ probabilities so no tx is linked by a model that saw its own scenario.
 | 24 | First-pass score propagated within component as a feature | 51.9 | +0.6 ± 0.9 (noise) | reject |
 | 25 | Weekly collect/pay-out wave counts per wallet (relay-hub repetition) | — | 85% of all wallets have ≥2 waves | not built |
 | 26 | **Component lift** post-processing: 0.5 × own rank + 0.5 × best rank in the 10-min burst | **53.7** | **+1.51 ± 0.19 vs v4, 14/15** | **keep → v5** |
+| — | **Leaderboard v5**: **58.3**, top-1% P 0.91 R 0.29 (breakdown unchanged: easy 40%, medium 10%) | CV 53.7 | lift transferred (+0.8) | |
+| 27 | Lift weight 0.7 (10-min window) | 54.0 | +0.31 ± 0.11 vs 26, 13/15 | keep |
+| 28 | Lift window 5 min, weight 0.7 | **54.3** | +0.25 ± 0.13 vs 27; +0.56 ± 0.10 vs v5 | **keep → v6** |
+| 29 | Full lift to the burst maximum (w = 1.0) | 49.1 | drags decoy/relay bursts up | reject |
+| 30 | Component-level classifier (one row per 10-min burst, label = any suspicious member) | 36–52 | far below tx-level model | reject |
+
+Leaderboard reading (13:40): 42 teams; leader 72.2. The leader's best run catches 50% of easy,
+10% of medium, 0% hard, 0% ambiguous in its top 1% (ours: 40% / 10% / 0 / 0); top-1% precision
+and recall are ~equal for everyone (93–96% / 30–31%, max possible recall 32%). So the gap to
+the top is entirely in ranking the *remaining* easy cases above negatives below the top 1%.
 
 Error analysis behind 26: 151 of 800 easy positives ranked below the top 3%, but only 8 of
 105 easy scenarios were missed entirely; the misses are the *edges* of caught bursts (fan-out

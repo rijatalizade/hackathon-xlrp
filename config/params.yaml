@@ -105,7 +105,7 @@ ensemble:
 postprocess:
   component_lift:            # rank the burst, not the payment (src/model/postprocess.py)
     enabled: true
-    window_secs: 600         # same 10-min continuation/burst links as features.motif
-    weight: 0.5              # final = 0.5 * own rank + 0.5 * best rank in the component
+    window_secs: 300         # 5-min continuation/burst links (easy motifs complete in ~5 min)
+    weight: 0.7              # final = 0.3 * own rank + 0.7 * best rank in the component
 
 n_jobs: 1                    # keep 1 for the final, reproducible run
