@@ -40,6 +40,15 @@ previous row on identical folds; we keep a change only if gain > 2 × SE.
 | 8 | LightGBM more regularised (7 leaves, min 80/leaf, 500 trees) | 49.7 | +0.87 ± 0.38, 10/15 | keep |
 | 9 | Drop `motif_value_cv_10m` (only feature with train/test KS > 0.1) | 50.1 | +0.21 ± 0.39 (noise) | keep: removes drift |
 
+| — | **Leaderboard v1** (commit d13e6d0): 57.3, top-1% P 0.90 R 0.29 | CV 50.1 | LB inside CV fold range (41–60) | no overfit sign |
+| 10 | Burst shape: share of wallets that pass money through, hub share | 50.4 | −0.04 ± 0.59 (noise) | reject |
+| 11 | Wallet repetition (# bursts a wallet joins per week) | — | no univariate signal (all ~22) | not built |
+
+Rows 10–11 targeted the legitimate relay txs that crowd the top 3% (ceiling analysis: removing
+the worst quarter of them would add ~5 AP). `through_frac` separates them from true positives
+on its own (AUC 0.78) and the model used it heavily, but only as a substitute for existing
+features: the top-3% composition didn't change (relay false positives 257 → 258).
+
 Other LightGBM settings (slower/longer, less regularised, `is_unbalance`) were all within
 ±0.4 of each other: the model is not sensitive to its hyperparameters.
 
