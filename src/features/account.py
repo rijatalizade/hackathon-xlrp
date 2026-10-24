@@ -8,16 +8,16 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from src.features.base import rolling_count, to_seconds, validate
+from src.features.base import rolling_count, validate
 
 PREFIX = "acct_"
 
 
 def _activity(tx: pd.DataFrame) -> pd.DataFrame:
     """Long table: one row per (tx, side) with acct, counterparty, direction."""
-    secs = to_seconds(tx["timestamp"])
     pos = np.arange(len(tx))
-    common = {"tx_id": tx["tx_id"].to_numpy(), "ts": secs, "amt": tx["amount"].to_numpy(),
+    common = {"tx_id": tx["tx_id"].to_numpy(), "ts": tx["ts"].to_numpy(),
+              "amt": tx["value_usd"].to_numpy(),
               "pos": pos}
     out = pd.DataFrame({**common, "acct": tx["sender"].to_numpy(),
                         "cp": tx["receiver"].to_numpy(), "is_in": 0})
@@ -28,10 +28,10 @@ def _activity(tx: pd.DataFrame) -> pd.DataFrame:
         drop=True)
 
 
-def build(tx: pd.DataFrame, accounts: pd.DataFrame | None, cfg: dict) -> pd.DataFrame:
-    """n_tx_total/1h/24h, vol_in/out, inout_ratio, distinct counterparties, age,
+def build(tx: pd.DataFrame, legs: pd.DataFrame, cfg: dict) -> pd.DataFrame:
+    """n_tx_total + windowed counts, vol_in/out (USD), inout_ratio, distinct counterparties, age,
     mean gap and burstiness, for both sender (acct_s_) and receiver (acct_r_)."""
-    windows = cfg.get("features", {}).get("account_windows_secs", {"1h": 3600, "24h": 86400})
+    windows = cfg["features"]["account_windows_secs"]
     long = _activity(tx)
     g = long.groupby("acct", sort=False)
     a = pd.DataFrame(index=long.index)

@@ -4,7 +4,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from src.features.base import rolling_count, to_seconds, validate
+from src.features.base import rolling_count, validate
 
 PREFIX = "rule_"
 
@@ -13,7 +13,7 @@ def structuring(tx: pd.DataFrame, secs: np.ndarray, p: dict) -> np.ndarray:
     """1 if the tx is just below threshold T and its sender made >= N such txs within
     +/- W seconds of it."""
     T, margin = p["threshold"], p["margin"]
-    cand = ((tx["amount"] >= T * (1 - margin)) & (tx["amount"] < T)).to_numpy()
+    cand = ((tx["value_usd"] >= T * (1 - margin)) & (tx["value_usd"] < T)).to_numpy()
     out = np.zeros(len(tx), dtype=bool)
     if cand.any():
         s, t, w = tx["sender"].to_numpy()[cand], secs[cand], int(p["window_secs"])
@@ -23,7 +23,7 @@ def structuring(tx: pd.DataFrame, secs: np.ndarray, p: dict) -> np.ndarray:
 
 
 def passthrough(tx: pd.DataFrame, secs: np.ndarray, p: dict) -> np.ndarray:
-    """1 if the receiver sends out >= forward_ratio * amount within (t, t + W]."""
+    """1 if the receiver sends out >= forward_ratio * value (USD) within (t, t + W]."""
     w = int(p["window_secs"])
     accts = pd.Index(np.unique(np.concatenate([tx["sender"], tx["receiver"]])))
     s_code = accts.get_indexer(tx["sender"]).astype(np.int64)
@@ -32,17 +32,18 @@ def passthrough(tx: pd.DataFrame, secs: np.ndarray, p: dict) -> np.ndarray:
     span = int(rel.max()) + w + 1
     order = np.lexsort((rel, s_code))
     out_key = s_code[order] * span + rel[order]
-    cum = np.concatenate([[0.0], np.cumsum(tx["amount"].to_numpy()[order])])
+    cum = np.concatenate([[0.0], np.cumsum(tx["value_usd"].to_numpy()[order])])
     lo = r_code * span + rel
     fwd = (cum[np.searchsorted(out_key, lo + w, side="right")]
            - cum[np.searchsorted(out_key, lo, side="right")])
-    amt = tx["amount"].to_numpy()
+    amt = tx["value_usd"].to_numpy()
     return (amt > 0) & (fwd >= p["forward_ratio"] * amt)
 
 
 def round_amount(tx: pd.DataFrame, p: dict) -> np.ndarray:
-    """1 if amount is a non-zero multiple of `level`."""
-    return ((tx["amount"] > 0) & (tx["amount"] % p["level"] == 0)).to_numpy()
+    """1 if the delivered amount (native units) is a non-zero multiple of `level`."""
+    a = tx["amount_out"]
+    return ((a > 0) & np.isclose(a % p["level"], 0)).to_numpy()
 
 
 def velocity_burst(tx: pd.DataFrame, secs: np.ndarray, p: dict) -> np.ndarray:
@@ -55,10 +56,10 @@ def velocity_burst(tx: pd.DataFrame, secs: np.ndarray, p: dict) -> np.ndarray:
     return (n_short >= p["min_count"]) & (n_short >= p["rate_ratio"] * expected)
 
 
-def build(tx: pd.DataFrame, accounts: pd.DataFrame | None, cfg: dict) -> pd.DataFrame:
+def build(tx: pd.DataFrame, legs: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     """All rule flags plus `rule_score` = weighted mean of flags (weights in params)."""
     rc = cfg["rules"]
-    secs = to_seconds(tx["timestamp"])
+    secs = tx["ts"].to_numpy()
     f = pd.DataFrame(index=pd.Index(tx["tx_id"], name="tx_id"))
     f["rule_structuring"] = structuring(tx, secs, rc["structuring"])
     f["rule_passthrough"] = passthrough(tx, secs, rc["passthrough"])

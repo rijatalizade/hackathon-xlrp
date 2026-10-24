@@ -1,6 +1,6 @@
 PY := .venv/bin/python
 
-.PHONY: setup sample features run test clean submit-check
+.PHONY: setup sample cv run test drift zip clean submit-check
 
 setup:
 	python3 -m venv .venv
@@ -9,22 +9,26 @@ setup:
 sample:
 	$(PY) scripts/make_sample_data.py
 
-features:
-	$(PY) -c "import logging; logging.basicConfig(level=logging.INFO); \
-	from src.config import load_params, FEATURES_PATH; from src.data.load import load_raw; \
-	from src.pipeline import build_features; cfg = load_params(); tx, a = load_raw(cfg); \
-	FEATURES_PATH.parent.mkdir(parents=True, exist_ok=True); \
-	build_features(tx, a, cfg).to_parquet(FEATURES_PATH); print('wrote', FEATURES_PATH)"
+cv:            ## grouped CV report on train + predictions for validation/ (no test needed)
+	$(PY) -m src.pipeline --target validation --out outputs/validation/predictions.csv
 
-run:
+run:           ## final: predictions for test/
 	./run.sh
 
 test:
 	$(PY) -m pytest -q
 
+drift:         ## per-feature train-vs-test distribution shift
+	$(PY) -m src.pipeline --target test --no-cv
+	$(PY) scripts/drift_check.py --other test
+
+zip:           ## code ZIP for upload (tracked files only: no data, no venv)
+	git archive --format=zip -o outputs/code.zip HEAD
+	@ls -lh outputs/code.zip
+
 clean:
-	rm -rf outputs/models outputs/predictions.csv outputs/run_meta.json \
-	       data/processed/features.parquet .pytest_cache
+	rm -rf outputs/models outputs/predictions.csv outputs/run_meta.json outputs/validation \
+	       data/processed/*.parquet .pytest_cache
 	find . -name __pycache__ -type d -prune -exec rm -rf {} +
 
 submit-check:

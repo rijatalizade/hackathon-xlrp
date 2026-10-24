@@ -1,7 +1,8 @@
 """Graph features from the sender -> receiver network (prefix `graph_`). Owner: P3.
 
-The graph is built from ALL txs (train + test, labels never used), so these features
-are transductive, not point-in-time.
+The graph is built from all txs of the split (labels never used), so these features
+use the whole week, not point-in-time. Always built within ONE split (wallets are
+disjoint between splits).
 """
 from __future__ import annotations
 
@@ -16,7 +17,7 @@ PREFIX = "graph_"
 
 def build_graph(tx: pd.DataFrame) -> nx.DiGraph:
     """DiGraph with one edge per (sender, receiver) pair; attrs `weight` (count), `amount`."""
-    edges = (tx.groupby(["sender", "receiver"], sort=True)["amount"]
+    edges = (tx.groupby(["sender", "receiver"], sort=True)["value_usd"]
                .agg(weight="size", amount="sum").reset_index())
     G = nx.DiGraph()
     G.add_nodes_from(sorted(set(tx["sender"]) | set(tx["receiver"])))
@@ -62,7 +63,7 @@ def neighbour_mean_score(G: nx.DiGraph, tx: pd.DataFrame, prior: pd.Series) -> p
     raise NotImplementedError
 
 
-def build(tx: pd.DataFrame, accounts: pd.DataFrame | None, cfg: dict) -> pd.DataFrame:
+def build(tx: pd.DataFrame, legs: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     """Sender/receiver node features joined onto each tx."""
     G = build_graph(tx)
     nf = node_features(G)
