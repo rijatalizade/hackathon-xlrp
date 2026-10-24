@@ -35,7 +35,8 @@ features:
     cycle_max_hops: 6
   links:                     # learned scenario links (src/model/links.py)
     window_secs: 14400       # candidate pairs at most 4h apart
-    thresholds: [0.6, 0.7, 0.8]  # link-probability cut-offs (0.3 percolates; 0.5 drifts on test)
+    thresholds: [0.5, 0.6, 0.7, 0.8]  # link-probability cut-offs for components (0.3 percolates)
+    prob_features: true      # raw link probabilities as features (CV +0.7; KS ~0.1 vs test, LB-tested as v3)
     model:
       n_estimators: 300
       learning_rate: 0.05

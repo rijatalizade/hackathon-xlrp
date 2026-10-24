@@ -91,7 +91,7 @@ def fit(tx_train: pd.DataFrame, cfg: dict):
     log.info("links: %d pairs, %.2f%% same-scenario, OOF AUC %.3f", len(P), 100 * y.mean(),
              roc_auc_score(y, oof))
     model = _model(cfg).fit(P[PAIR_FEATURES], y)
-    return model, features(txs, P, oof, lcfg["thresholds"])
+    return model, features(txs, P, oof, lcfg["thresholds"], lcfg.get("prob_features", False))
 
 
 def transform(model, tx: pd.DataFrame, cfg: dict) -> pd.DataFrame:
@@ -99,11 +99,13 @@ def transform(model, tx: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     lcfg = cfg["features"]["links"]
     txs, P = candidate_pairs(tx, int(lcfg["window_secs"]))
     p = model.predict_proba(P[PAIR_FEATURES])[:, 1] if len(P) else np.zeros(0)
-    return features(txs, P, p, lcfg["thresholds"])
+    return features(txs, P, p, lcfg["thresholds"], lcfg.get("prob_features", False))
 
 
-def features(txs: pd.DataFrame, P: pd.DataFrame, p: np.ndarray, thresholds) -> pd.DataFrame:
-    """Component and link-strength features per tx (txs is time-sorted, P indexes into it)."""
+def features(txs: pd.DataFrame, P: pd.DataFrame, p: np.ndarray, thresholds,
+             prob_features: bool = False) -> pd.DataFrame:
+    """Component features per tx (txs is time-sorted, P indexes into it); with
+    prob_features also each tx's strongest / summed link probabilities (drift on test)."""
     n = len(txs)
     t, snd, rcv = txs["ts"].to_numpy(), txs["sender"].to_numpy(), txs["receiver"].to_numpy()
     j, k = P["j"].to_numpy(), P["k"].to_numpy()
@@ -135,4 +137,9 @@ def features(txs: pd.DataFrame, P: pd.DataFrame, p: np.ndarray, thresholds) -> p
         f[f"lk_wallets_{tag}"] = shape["wallets"].reindex(comp).to_numpy()
         f[f"lk_through_{tag}"] = shape["through"].reindex(comp).to_numpy()
         f[f"lk_rate_{tag}"] = size / (span / 3600 + 0.1)
+    if prob_features:
+        pin = pd.Series(p).groupby(k).agg(["max", "sum"]).reindex(range(n)).fillna(0)
+        pout = pd.Series(p).groupby(j).agg(["max", "sum"]).reindex(range(n)).fillna(0)
+        f["lk_p_in_max"], f["lk_p_in_sum"] = pin["max"].to_numpy(), pin["sum"].to_numpy()
+        f["lk_p_out_max"], f["lk_p_out_sum"] = pout["max"].to_numpy(), pout["sum"].to_numpy()
     return validate(f, PREFIX)
