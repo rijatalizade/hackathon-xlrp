@@ -59,6 +59,15 @@ probabilities so no tx is linked by a model that saw its own scenario.
 | 16 | `shapes`: training-deck signals (depositors, exit≈sum of deposits, recipients, hub imbalance, hub overlap, two-hop routes) | 52.0 | +1.73 ± 0.45 vs 9, 14/15 | keep |
 | 17 | shapes without payout-similarity (KS 0.15 vs test) | 51.7 | −0.3 (noise) vs 16 | keep: no drift |
 | 18 | 5-seed bagging of LightGBM | 52.2 | +0.49 ± 0.15 vs 17, 13/15 | keep → **v4** |
+| — | **Leaderboard v4**: **57.5**, top-1% P 0.91 | CV 52.2 | shape features transferred | current best |
+| 19 | Medium specialist (LightGBM on medium positives vs legitimate only) | medium AP 1.2 (main: 6.3) | — | reject |
+| 20 | Blend main + medium specialist (20–50%) | 30–40 overall | drags easy cases down | reject |
+| 21 | Medium positives weighted ×3 / ×6 in the main model | 50.4 / 48.9 | medium unchanged | reject |
+
+Medium cases: only 27 scenarios (225 txs) in train. Nothing in our features separates them
+from busy legitimate traffic at the 1–3h scale they operate on, and a model that focuses on
+them learns generic wallet features instead. Learning from 27 scenarios would also be the
+train-specific kind of signal that failed to transfer (v2/v3).
 
 Lesson from v2/v3: our CV groups by scenario, but all train scenarios share one generator
 style; the test split has "batch variations absent from training". A model that LEARNS
