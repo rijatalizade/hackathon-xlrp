@@ -102,4 +102,10 @@ ensemble:
     iforest: 0.5
     rules: 0.5
 
+postprocess:
+  component_lift:            # rank the burst, not the payment (src/model/postprocess.py)
+    enabled: true
+    window_secs: 600         # same 10-min continuation/burst links as features.motif
+    weight: 0.5              # final = 0.5 * own rank + 0.5 * best rank in the component
+
 n_jobs: 1                    # keep 1 for the final, reproducible run

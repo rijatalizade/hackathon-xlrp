@@ -20,7 +20,7 @@ import pandas as pd
 from src.config import PREDICTIONS_PATH, load_params
 from src.data.load import detect_mode, feature_view, load_split, split_dir
 from src.features import MODULES
-from src.model import cv, ensemble, links, predict, train
+from src.model import cv, ensemble, links, postprocess, predict, train
 
 log = logging.getLogger("pipeline")
 ALL_MODULES = list(MODULES) + ["links"]  # "links" = learned scenario links (src/model/links.py)
@@ -94,7 +94,8 @@ def run(target: str = "test", sample: bool = False, modules: list[str] | None = 
         if "rule_score" in X_tr:
             comp["rules"] = X_tr["rule_score"].fillna(0).to_numpy()
         if mode == "supervised":
-            res = cv.repeated_cv(X_tr, y, tr_tx, cfg, _lgbm_fit_score(cfg), repeats)
+            post = lambda s: postprocess.component_lift(s, tr_tx, cfg)  # noqa: E731
+            res = cv.repeated_cv(X_tr, y, tr_tx, cfg, _lgbm_fit_score(cfg), repeats, post)
             comp["lgbm"] = res["oof"]
             report["lgbm"] = res["summary"]
             oof = tr_tx[["tx_id", "label"] + [c for c in tr_tx if c.startswith("meta_")]].copy()
@@ -109,7 +110,7 @@ def run(target: str = "test", sample: bool = False, modules: list[str] | None = 
         train.save(train.train_lgbm(X_tr, tr_tx["label"].astype(int), cfg["models"]["lgbm"],
                                     seed, n_jobs), "lgbm", run_dir)
 
-    sub = predict.predict(X_tg, cfg, mode, out_path=out)
+    sub = predict.predict(X_tg, cfg, mode, out_path=out, tx_target=tg_tx)
     meta = {"mode": mode, "sample": sample, "target": target, "n_rows": len(sub),
             "n_features": X_tr.shape[1], "modules": modules, "cv": report}
     (run_dir / "run_meta.json").write_text(json.dumps(meta, indent=2, sort_keys=True))

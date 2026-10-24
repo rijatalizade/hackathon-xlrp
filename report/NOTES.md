@@ -63,6 +63,16 @@ probabilities so no tx is linked by a model that saw its own scenario.
 | 19 | Medium specialist (LightGBM on medium positives vs legitimate only) | medium AP 1.2 (main: 6.3) | — | reject |
 | 20 | Blend main + medium specialist (20–50%) | 30–40 overall | drags easy cases down | reject |
 | 21 | Medium positives weighted ×3 / ×6 in the main model | 50.4 / 48.9 | medium unchanged | reject |
+| 22 | Generator-artifact scan (ledger alignment, sequence order, decimals, fees, SendMax/Amount) | — | every AUC ≈ 0.50 | data is clean |
+| 23 | Burst aggregates of top features over the 10-min component | 51.6 | −0.3 ± 1.0 (noise) | reject |
+| 24 | First-pass score propagated within component as a feature | 51.9 | +0.6 ± 0.9 (noise) | reject |
+| 25 | Weekly collect/pay-out wave counts per wallet (relay-hub repetition) | — | 85% of all wallets have ≥2 waves | not built |
+| 26 | **Component lift** post-processing: 0.5 × own rank + 0.5 × best rank in the 10-min burst | **53.7** | **+1.51 ± 0.19 vs v4, 14/15** | **keep → v5** |
+
+Error analysis behind 26: 151 of 800 easy positives ranked below the top 3%, but only 8 of
+105 easy scenarios were missed entirely; the misses are the *edges* of caught bursts (fan-out
+leaves that keep the money, source payments not just funded). Ranking the burst instead of
+the payment lifts them; top-1% precision drops 0.81 → 0.79 as the price.
 
 Medium cases: only 27 scenarios (225 txs) in train. Nothing in our features separates them
 from busy legitimate traffic at the 1–3h scale they operate on, and a model that focuses on

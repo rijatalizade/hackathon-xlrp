@@ -52,15 +52,19 @@ def groups_for(tx: pd.DataFrame, cfg: dict) -> np.ndarray:
 
 
 def oof_scores(X: pd.DataFrame, y: np.ndarray, groups: np.ndarray, cfg: dict,
-               fit_score: Callable, seed: int) -> tuple[np.ndarray, list[float]]:
-    """One grouped k-fold pass. fit_score(X_fit, y_fit, X_check) -> scores.
+               fit_score: Callable, seed: int, post: Callable | None = None
+               ) -> tuple[np.ndarray, list[float]]:
+    """One grouped k-fold pass. fit_score(X_fit, y_fit, X_check) -> scores; `post` (optional)
+    transforms the complete OOF vector before fold APs are taken (e.g. component lift).
     Returns (out-of-fold scores, per-fold AP x100)."""
     skf = StratifiedGroupKFold(n_splits=cfg["cv"]["n_splits"], shuffle=True, random_state=seed)
-    oof, fold_aps = np.zeros(len(X)), []
+    oof, folds = np.zeros(len(X)), []
     for fit_idx, chk_idx in skf.split(X, y, groups):
         oof[chk_idx] = fit_score(X.iloc[fit_idx], y[fit_idx], X.iloc[chk_idx])
-        fold_aps.append(ap100(y[chk_idx], oof[chk_idx]))
-    return oof, fold_aps
+        folds.append(chk_idx)
+    if post is not None:
+        oof = post(oof)
+    return oof, [ap100(y[chk_idx], oof[chk_idx]) for chk_idx in folds]
 
 
 def evaluate(y, s, tx: pd.DataFrame, cfg: dict) -> dict:
@@ -80,14 +84,15 @@ def evaluate(y, s, tx: pd.DataFrame, cfg: dict) -> dict:
 
 
 def repeated_cv(X: pd.DataFrame, y: np.ndarray, tx: pd.DataFrame, cfg: dict,
-                fit_score: Callable, repeats: int | None = None) -> dict:
+                fit_score: Callable, repeats: int | None = None, post: Callable | None = None
+                ) -> dict:
     """Repeated grouped CV. Returns {'oof': first repeat's OOF scores, 'summary': {...}}.
     summary.ap = mean over repeats of overall OOF AP; ap_fold_std = std of all fold APs."""
     groups = groups_for(tx, cfg)
     repeats = repeats or cfg["cv"].get("repeats", 1)
     runs, folds, first_oof = [], [], None
     for r in range(repeats):
-        oof, fold_aps = oof_scores(X, y, groups, cfg, fit_score, cfg["seed"] + r)
+        oof, fold_aps = oof_scores(X, y, groups, cfg, fit_score, cfg["seed"] + r, post)
         first_oof = oof if first_oof is None else first_oof
         runs.append(evaluate(y, oof, tx, cfg))
         folds += fold_aps

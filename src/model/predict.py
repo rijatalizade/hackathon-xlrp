@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 from src.config import PREDICTIONS_PATH
-from src.model import ensemble, train
+from src.model import ensemble, postprocess, train
 
 
 def component_scores(X: pd.DataFrame, cfg: dict, mode: str, run_dir: Path) -> dict[str, np.ndarray]:
@@ -24,13 +24,18 @@ def component_scores(X: pd.DataFrame, cfg: dict, mode: str, run_dir: Path) -> di
     return scores
 
 
-def predict(X_target: pd.DataFrame, cfg: dict, mode: str, out_path: Path = PREDICTIONS_PATH
-            ) -> pd.DataFrame:
+def predict(X_target: pd.DataFrame, cfg: dict, mode: str, out_path: Path = PREDICTIONS_PATH,
+            tx_target: pd.DataFrame | None = None) -> pd.DataFrame:
     """Rank-average the components, write and return the submission CSV.
     X_target is indexed by tx_id (one row per target tx); models are read from
     out_path's folder (the run dir)."""
     final = ensemble.rank_average(component_scores(X_target, cfg, mode, out_path.parent),
                                    cfg["ensemble"][mode])
+    if tx_target is not None:  # burst-level lift, then back to [0, 1]
+        final = postprocess.component_lift(final, tx_target.set_index("tx_id").loc[X_target.index]
+                                           .reset_index(), cfg)
+        lo, hi = final.min(), final.max()
+        final = (final - lo) / (hi - lo) if hi > lo else np.full(len(final), 0.5)
     sub = cfg["submission"]
     df = pd.DataFrame({sub["id_col"]: X_target.index.to_numpy(), sub["score_col"]: final})
     assert df[sub["id_col"]].is_unique, "duplicate ids"
