@@ -1,4 +1,4 @@
-"""Score test txs with saved models and write the submission CSV. Owner: P1."""
+"""Score target-split txs with saved models and write the submission CSV. Owner: P1."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -10,22 +10,27 @@ from src.config import PREDICTIONS_PATH
 from src.model import ensemble, train
 
 
-def predict(X_test: pd.DataFrame, cfg: dict, mode: str, out_path: Path = PREDICTIONS_PATH
-            ) -> pd.DataFrame:
-    """Load saved models, rank-average with the rule score, write and return the CSV.
-    X_test is indexed by tx_id (one row per test tx)."""
-    weights = cfg["ensemble"][mode]
+def component_scores(X: pd.DataFrame, cfg: dict, mode: str) -> dict[str, np.ndarray]:
+    """Scores of every ensemble component with a non-zero weight, from saved models."""
     scores = {}
-    for name in weights:
+    for name, w in cfg["ensemble"][mode].items():
+        if w <= 0:
+            continue
         if name == "rules":
-            if "rule_score" in X_test:
-                scores["rules"] = X_test["rule_score"].fillna(0).to_numpy()
+            if "rule_score" in X:
+                scores["rules"] = X["rule_score"].fillna(0).to_numpy()
         elif name != "lgbm" or mode == "supervised":
-            scores[name] = train.score(train.load(name), X_test)
-    final = ensemble.rank_average(scores, weights)
+            scores[name] = train.score(train.load(name), X)
+    return scores
 
+
+def predict(X_target: pd.DataFrame, cfg: dict, mode: str, out_path: Path = PREDICTIONS_PATH
+            ) -> pd.DataFrame:
+    """Rank-average the components, write and return the submission CSV.
+    X_target is indexed by tx_id (one row per target tx)."""
+    final = ensemble.rank_average(component_scores(X_target, cfg, mode), cfg["ensemble"][mode])
     sub = cfg["submission"]
-    df = pd.DataFrame({sub["id_col"]: X_test.index.to_numpy(), sub["score_col"]: final})
+    df = pd.DataFrame({sub["id_col"]: X_target.index.to_numpy(), sub["score_col"]: final})
     assert df[sub["id_col"]].is_unique, "duplicate ids"
     assert not df[sub["score_col"]].isna().any(), "NaN scores"
     assert np.all((final >= 0) & (final <= 1)), "scores outside [0, 1]"

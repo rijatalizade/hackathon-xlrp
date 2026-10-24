@@ -1,38 +1,44 @@
 # All tunable knobs live here. Nothing in src/ should hard-code thresholds.
 
+data:
+  raw_dir: data/raw          # contains train/, validation/, test/ (organiser folders or symlinks)
+  sample_dir: data/sample    # synthetic mini-splits in the same format (for tests)
+
 submission:
-  id_col: tx_id              # TODO(P1): confirm at briefing
-  score_col: suspicion_score # TODO(P1): confirm at briefing
+  id_col: TRANSACTION_HASH
+  score_col: score
   float_format: "%.8f"
 
 cv:
   n_splits: 5
-  metric: average_precision  # roc_auc | average_precision  TODO(P1): confirm at briefing
+  repeats: 3                 # repeated grouped CV with seeds SEED, SEED+1, ...
+  group_col: meta_scenario_id  # txs of one scenario never split across folds
+  metric: average_precision  # site score = 100 x AP
+  top_frac: 0.01             # site also shows precision/recall in the top 1%
 
 features:
-  round_levels: [100, 1000, 10000]
-  native_currency: XRP
-  conversion_tx_types: [OfferCreate, OfferCancel, AMMDeposit, AMMWithdraw, AMMSwap]
+  round_levels: [10, 100, 1000]   # on delivered units (amount_out)
   account_windows_secs:
     1h: 3600
     24h: 86400
+    72h: 259200
 
 rules:
   structuring:
-    threshold: 10000         # reporting threshold T
-    margin: 0.15             # "just below" = [T*(1-margin), T)
-    min_count: 4             # N txs
-    window_secs: 86400       # W
+    threshold: 1000          # USD. TODO(P5): set from EDA; just-below-threshold bursts
+    margin: 0.15
+    min_count: 4
+    window_secs: 86400
   passthrough:
-    forward_ratio: 0.8       # receiver forwards >= 80% of the amount ...
+    forward_ratio: 0.8       # receiver forwards >= 80% of the value ...
     window_secs: 3600        # ... within W
   round_amount:
-    level: 1000
+    level: 100
   velocity_burst:
     short_secs: 3600
     long_secs: 86400
-    min_count: 5             # >= 5 txs in the short window
-    rate_ratio: 4.0          # short-window rate >= 4x long-window rate
+    min_count: 5
+    rate_ratio: 4.0
   weights:                   # rule_score = weighted mean of the flags
     rule_structuring: 1.0
     rule_passthrough: 1.0
@@ -40,15 +46,15 @@ rules:
     rule_velocity_burst: 0.5
 
 models:
-  lgbm:
+  lgbm:                      # regularised on purpose: small trees, subsampling
     n_estimators: 300
     learning_rate: 0.05
-    num_leaves: 31
-    min_child_samples: 10
+    num_leaves: 15
+    min_child_samples: 40
     subsample: 0.8
     subsample_freq: 1
-    colsample_bytree: 0.8
-    reg_lambda: 1.0
+    colsample_bytree: 0.7
+    reg_lambda: 5.0
     deterministic: true
     force_row_wise: true
     verbose: -1
@@ -59,9 +65,9 @@ models:
 
 ensemble:
   supervised:
-    lgbm: 0.7
-    iforest: 0.1
-    rules: 0.2
+    lgbm: 1.0
+    iforest: 0.0
+    rules: 0.0
   unsupervised:
     iforest: 0.5
     rules: 0.5

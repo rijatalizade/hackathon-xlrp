@@ -24,12 +24,17 @@ A hackathon entry that assigns a **suspicion score in [0, 1]** to each transacti
 
 ```bash
 git clone [repo url] && cd [repo]
-# put the organiser files in data/raw/ (they are not in git), check config/schema.yaml
-./run.sh                 # -> outputs/predictions.csv, validated
-./run.sh --sample        # runs on the bundled synthetic sample instead
+# Organiser data is not in git. Put (or symlink) the split folders here:
+#   data/raw/train/        <- training package train/   (incl. labels.csv)
+#   data/raw/validation/   <- training package validation/
+#   data/raw/test/         <- the test download (transactions.parquet, transfers.parquet, ...)
+./run.sh                 # -> outputs/predictions.csv (TRANSACTION_HASH,score), validated
+./run.sh --sample        # same pipeline on the bundled synthetic mini-splits
+make cv                  # grouped-CV report on train only (no test data needed)
+make zip                 # outputs/code.zip for upload (tracked files only, no data)
 ```
 
-- Expected runtime: [~N min] on [laptop CPU model, RAM]. No GPU needed.
+- Runtime: ~30 s on [laptop CPU model, RAM]. No GPU, no network access.
 - Python [3.x]; exact versions pinned in `requirements.txt`.
 - Deterministic: `SEED = 42` (`src/config.py`), `n_jobs = 1`. `make test` checks that two
   runs give byte-identical predictions.
@@ -39,8 +44,11 @@ git clone [repo url] && cd [repo]
 
 ## 4. Method overview
 
-Feature modules (`src/features/`: transaction, account, graph, rule flags) → LightGBM
-(if labels are given) + IsolationForest → rank-average ensemble with the rule score.
+Each split is loaded into one row per payment, valued in USD at the organisers' hourly
+reference prices (`src/data/load.py`). Feature modules (`src/features/`: starter-notebook
+rules, transaction, account, graph, rule flags) are computed **within each split**
+(wallets are disjoint between splits) → gradient-boosted trees → `score`.
+Validation: repeated 5-fold CV **grouped by scenario**, reported per difficulty.
 See [report/REPORT.md](report/REPORT.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## 5. Submitted commit
@@ -50,7 +58,8 @@ See [report/REPORT.md](report/REPORT.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
 ## 6. Pre-existing vs built during the event (§3.4)
 
 - **Pre-existing:** [planning docs ARCHITECTURE.md / CLAUDE_CODE_BRIEF.md written before
-  the event; anything else].
+  the event; anything else]. `src/features/starter.py` is a port of the organisers'
+  `starter_notebook.ipynb` features.
 - **Built during the event:** [everything in src/, scripts/, tests/, config/, report/].
 
 ## 7. Third-party components & licences (§6.1)

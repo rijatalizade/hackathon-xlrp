@@ -1,126 +1,133 @@
-"""Load organiser files into canonical DataFrames. Owner: P1.
+"""Load one organiser split folder into the canonical (tx, legs) tables. Owner: P1.
 
-Canonical tx columns: tx_id, timestamp (UTC), sender, receiver, amount, and optionally
-currency, tx_type, fee, dest_tag, memo, label, split. Unmapped columns become `extra_*`.
+The column contract is in ARCHITECTURE.md §2. Each split folder holds
+transactions.parquet, transfers.parquet, market_rates.csv and (train only) labels.csv.
 """
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from src.config import RAW_DIR, SAMPLE_DIR, load_schema
+from src.config import ROOT
 
 log = logging.getLogger(__name__)
 
-REQUIRED = ["tx_id", "timestamp", "sender", "receiver", "amount"]
-RIPPLE_EPOCH_OFFSET = 946684800  # 2000-01-01T00:00:00Z in unix seconds
+XRP_TOKEN = "0x1111222211112222111122221111222211112222"
+LABEL_META = {"family": "meta_family", "difficulty": "meta_difficulty",
+              "scenario_id": "meta_scenario_id", "cohort_id": "meta_cohort_id"}
 
 
-def _read_file(path: Path) -> pd.DataFrame:
-    if path.suffix == ".parquet":
-        return pd.read_parquet(path)
-    return pd.read_csv(path, low_memory=False)
+def split_dir(cfg: dict, name: str, sample: bool = False) -> Path:
+    """Folder of split `name` (train | validation | test) from params.yaml `data`."""
+    key = "sample_dir" if sample else "raw_dir"
+    return ROOT / cfg["data"][key] / name
 
 
-def _list_files(data_dir: Path) -> list[Path]:
-    files = sorted(p for p in data_dir.iterdir() if p.suffix in {".csv", ".parquet"})
-    if not files:
-        raise FileNotFoundError(f"No .csv/.parquet files in {data_dir}")
-    return files
+def _int(s: pd.Series) -> pd.Series:
+    """Decimal/object integer column -> int64."""
+    return pd.to_numeric(s.astype(str)).astype("int64")
 
 
-def _rename(df: pd.DataFrame, schema: dict) -> pd.DataFrame:
-    """Organiser names -> canonical; anything unmapped -> extra_<name>."""
-    mapping = {v: k for k, v in (schema.get("columns") or {}).items() if v}
-    renamed = {c: mapping.get(c, f"extra_{c}") for c in df.columns}
-    unmapped = [c for c, new in renamed.items() if new.startswith("extra_")]
-    if unmapped:
-        log.info("Unmapped columns kept as extra_*: %s", unmapped)
-    return df.rename(columns=renamed)
+def _asset(token: pd.Series, symbol: pd.Series) -> pd.Series:
+    """'XRP' or 'issuer:CUR' (the key used in market_rates.csv)."""
+    return pd.Series(np.where(token == XRP_TOKEN, "XRP", token + ":" + symbol), index=token.index)
 
 
-def _parse_timestamp(s: pd.Series, unit: str) -> pd.Series:
-    if pd.api.types.is_numeric_dtype(s):
-        if unit == "ripple":
-            return pd.to_datetime(s + RIPPLE_EPOCH_OFFSET, unit="s", utc=True)
-        return pd.to_datetime(s, unit=unit, utc=True)
-    return pd.to_datetime(s, utc=True, format="mixed")
+def load_rates(d: Path) -> pd.DataFrame:
+    """Hourly reference prices: columns hour (unix s), asset, price_usd."""
+    r = pd.read_csv(d / "market_rates.csv")
+    return pd.DataFrame({"hour": r["TIMESTAMP"].astype("int64"), "asset": r["ASSET"],
+                         "price_usd": r["PRICE_MICRO_USD"] / 1e6})
 
 
-def load_raw(cfg: dict | None = None, sample: bool = False, data_dir: Path | None = None):
-    """Read every CSV/parquet in data/raw (or data/sample) into canonical form.
+def _value_usd(ts: pd.Series, asset: pd.Series, amount: pd.Series, rates: pd.DataFrame
+               ) -> np.ndarray:
+    """amount * price of `asset` in the hour containing `ts`."""
+    key = pd.DataFrame({"hour": (ts // 3600 * 3600).to_numpy(), "asset": asset.to_numpy()})
+    price = key.merge(rates, on=["hour", "asset"], how="left")["price_usd"]
+    if price.isna().any():
+        raise ValueError(f"{price.isna().sum()} legs without a market rate")
+    return amount.to_numpy() * price.to_numpy()
 
-    Returns (tx, accounts). `tx` is sorted by (timestamp, tx_id), has unique tx_id,
-    UTC `timestamp` and a `split` column in {train, test}. `accounts` is None unless
-    an accounts file is present.
-    """
-    schema = load_schema()
-    data_dir = Path(data_dir) if data_dir else (SAMPLE_DIR if sample else RAW_DIR)
-    names = schema.get("file_split") or {}
-    acct_key = schema.get("accounts_file_contains", "account")
-    label_key = schema.get("labels_file_contains", "label")
 
-    tx_parts, accounts, labels = [], None, None
-    for path in _list_files(data_dir):
-        stem = path.stem.lower()
-        df = _read_file(path)
-        if acct_key and acct_key in stem:
-            accounts = _rename(df, schema)
-            log.info("Accounts file %s: %d rows", path.name, len(df))
-            continue
-        df = _rename(df, schema)
-        if label_key and label_key in stem and set(df.columns) <= {"tx_id", "label"}:
-            labels = df
-            log.info("Labels file %s: %d rows", path.name, len(df))
-            continue
-        if "split" not in df.columns:
-            for split_name, key in names.items():
-                if key in stem:
-                    df["split"] = split_name
-        log.info("Tx file %s: %d rows, columns=%s", path.name, len(df), list(df.columns))
-        tx_parts.append(df)
+def load_split(d: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Read one split folder. Returns (tx, legs) per the ARCHITECTURE.md §2 contract.
+    `tx` has `label` and `meta_*` columns only if labels.csv exists."""
+    d = Path(d)
+    raw = pd.read_parquet(d / "transactions.parquet",
+                          columns=["TRANSACTION_HASH", "TIMESTAMP", "ACCOUNT", "FEE",
+                                   "EXTRA_TRANSACTION_FIELDS"])
+    tr = pd.read_parquet(d / "transfers.parquet",
+                         columns=["TRANSACTION_HASH", "TRANSFER_INDEX", "TRANSFER_TYPE",
+                                  "FROM_ADDRESS", "TO_ADDRESS", "TOKEN_ADDRESS", "SYMBOL",
+                                  "VALUE", "TIMESTAMP"])
+    rates = load_rates(d)
 
-    tx = pd.concat(tx_parts, ignore_index=True)
-    if labels is not None:
-        tx = tx.drop(columns=["label"], errors="ignore").merge(labels, on="tx_id", how="left")
+    legs = pd.DataFrame({
+        "tx_id": tr["TRANSACTION_HASH"].astype(str),
+        "leg": _int(tr["TRANSFER_INDEX"]),
+        "from_addr": tr["FROM_ADDRESS"].astype(str),
+        "to_addr": tr["TO_ADDRESS"].astype(str),
+        "asset": _asset(tr["TOKEN_ADDRESS"].astype(str), tr["SYMBOL"].astype(str)),
+        "amount": tr["VALUE"].astype(float),
+        "transfer_type": tr["TRANSFER_TYPE"].astype(str),
+    })
+    legs["value_usd"] = _value_usd(_int(tr["TIMESTAMP"]), legs["asset"], legs["amount"], rates)
+    legs = legs.sort_values(["tx_id", "leg"], kind="mergesort").reset_index(drop=True)
 
-    missing = [c for c in REQUIRED if c not in tx.columns]
-    if missing:
-        raise ValueError(f"Missing required columns {missing}; edit config/schema.yaml")
-    if "split" not in tx.columns:
-        raise ValueError("No `split` column and no train/test file names; edit schema.yaml")
+    g = legs.groupby("tx_id", sort=False)
+    first, last = g.first(), g.last()
+    mid = legs[legs["leg"] > 0].groupby("tx_id", sort=False)["from_addr"].agg(";".join)
 
-    tx["tx_id"] = tx["tx_id"].astype(str)
+    tx = pd.DataFrame({
+        "tx_id": raw["TRANSACTION_HASH"].astype(str),
+        "ts": _int(raw["TIMESTAMP"]),
+        "sender": raw["ACCOUNT"].astype(str),
+        "receiver": raw["EXTRA_TRANSACTION_FIELDS"].map(lambda s: json.loads(s)["Destination"]),
+        "fee": raw["FEE"].astype(float),
+    })
     if tx["tx_id"].duplicated().any():
-        raise ValueError(f"{tx['tx_id'].duplicated().sum()} duplicate tx_id values")
-    tx["timestamp"] = _parse_timestamp(tx["timestamp"], schema.get("timestamp_unit", "s"))
-    tx["sender"] = tx["sender"].astype(str)
-    tx["receiver"] = tx["receiver"].astype(str)
-    tx["amount"] = pd.to_numeric(tx["amount"], errors="coerce")
-    tx["split"] = tx["split"].astype(str).str.strip().str.lower()
-    if "label" in tx.columns:
-        tx["label"] = pd.to_numeric(tx["label"], errors="coerce")
+        raise ValueError("duplicate TRANSACTION_HASH")
+    tx["timestamp"] = pd.to_datetime(tx["ts"], unit="s", utc=True)
+    idx = tx["tx_id"]
+    tx["asset_out"] = last["asset"].reindex(idx).to_numpy()
+    tx["amount_out"] = last["amount"].reindex(idx).to_numpy()
+    tx["value_usd"] = last["value_usd"].reindex(idx).to_numpy()
+    tx["asset_in"] = first["asset"].reindex(idx).to_numpy()
+    tx["amount_in"] = first["amount"].reindex(idx).to_numpy()
+    tx["value_in_usd"] = first["value_usd"].reindex(idx).to_numpy()
+    tx["n_legs"] = g.size().reindex(idx).fillna(0).astype(int).to_numpy()
+    tx["is_conversion"] = (tx["asset_in"] != tx["asset_out"]).astype(int)
+    tx["providers"] = mid.reindex(idx).fillna("").to_numpy()
+    if tx["value_usd"].isna().any():
+        raise ValueError(f"{tx['value_usd'].isna().sum()} transactions without transfer legs")
+
+    labels_path = d / "labels.csv"
+    if labels_path.exists():
+        lab = pd.read_csv(labels_path).rename(columns={"TRANSACTION_HASH": "tx_id",
+                                                       "is_suspicious": "label", **LABEL_META})
+        keep = ["tx_id", "label"] + [c for c in LABEL_META.values() if c in lab]
+        tx = tx.merge(lab[keep], on="tx_id", how="left")
+        if tx["label"].isna().any():
+            raise ValueError(f"{tx['label'].isna().sum()} transactions without a label")
 
     tx = tx.sort_values(["timestamp", "tx_id"], kind="mergesort").reset_index(drop=True)
-    log.info("Loaded %d txs from %s; schema found: %s", len(tx), data_dir, list(tx.columns))
-    return tx, accounts
+    log.info("Loaded %s: %d txs, %d legs%s", d, len(tx), len(legs),
+             f", {int(tx['label'].sum())} suspicious" if "label" in tx else "")
+    return tx, legs
 
 
-def split(tx: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Return (train, test) according to the `split` column."""
-    train = tx[tx["split"] == "train"]
-    test = tx[tx["split"] == "test"]
-    if test.empty:
-        raise ValueError("No test rows found (split == 'test')")
-    return train, test
+def feature_view(tx: pd.DataFrame) -> pd.DataFrame:
+    """`tx` as feature modules may see it: no label, no meta_* columns."""
+    return tx.drop(columns=[c for c in tx.columns if c == "label" or c.startswith("meta_")])
 
 
 def detect_mode(tx: pd.DataFrame) -> str:
-    """'supervised' if the train split has non-null labels with both classes, else 'unsupervised'."""
-    if "label" not in tx.columns:
+    """'supervised' if `tx` (the train split) has labels of both classes."""
+    if "label" not in tx:
         return "unsupervised"
-    y = tx.loc[tx["split"] == "train", "label"].dropna()
-    return "supervised" if len(np.unique(y)) >= 2 else "unsupervised"
+    return "supervised" if tx["label"].nunique() >= 2 else "unsupervised"

@@ -1,6 +1,8 @@
-"""End-to-end: load -> features -> train -> predict -> predictions.csv. Owner: P1.
+"""End-to-end: load splits -> features (per split) -> grouped CV -> train -> predict.
 
-    python -m src.pipeline --mode auto|supervised|unsupervised [--sample] [--skip-graph]
+    python -m src.pipeline [--target test|validation] [--sample] [--only starter,tx]
+                           [--skip graph] [--repeats N] [--no-cv]
+Owner: P1.
 """
 from __future__ import annotations
 
@@ -10,30 +12,26 @@ import logging
 import time
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
-from src.config import FEATURES_PATH, PREDICTIONS_PATH, load_params
-from src.data.load import detect_mode, load_raw
+from src.config import PREDICTIONS_PATH, PROCESSED_DIR, load_params
+from src.data.load import detect_mode, feature_view, load_split, split_dir
 from src.features import MODULES
 from src.model import cv, ensemble, predict, train
 
 log = logging.getLogger("pipeline")
 
 
-def build_features(tx: pd.DataFrame, accounts, cfg: dict, skip: set[str] = frozenset()
-                   ) -> pd.DataFrame:
-    """Run every feature module; a module that raises is logged and skipped so one
-    broken module never blocks a submission. Result is aligned to tx['tx_id']."""
-    tx = tx.drop(columns=["label"], errors="ignore")  # labels never reach features
+def build_features(tx: pd.DataFrame, legs: pd.DataFrame, cfg: dict,
+                   modules: list[str] | None = None) -> pd.DataFrame:
+    """Run feature modules on ONE split; a module that raises is logged and skipped so
+    one broken module never blocks a submission. Result is aligned to tx['tx_id']."""
+    tx = feature_view(tx)  # labels / meta never reach features
     parts = []
-    for name, module in MODULES.items():
-        if name in skip:
-            log.info("features/%s: skipped", name)
-            continue
+    for name in modules or list(MODULES):
         t = time.time()
         try:
-            f = module.build(tx, accounts, cfg)
+            f = MODULES[name].build(tx, legs, cfg)
             parts.append(f.reindex(tx["tx_id"]))
             log.info("features/%s: %d cols in %.1fs", name, f.shape[1], time.time() - t)
         except Exception:
@@ -43,67 +41,85 @@ def build_features(tx: pd.DataFrame, accounts, cfg: dict, skip: set[str] = froze
     return pd.concat(parts, axis=1).astype(float)
 
 
-def run(mode: str = "auto", sample: bool = False, skip_graph: bool = False,
-        data_dir: Path | None = None, out: Path = PREDICTIONS_PATH) -> dict:
+def _lgbm_fit_score(cfg):
+    def fit_score(X_fit, y_fit, X_chk):
+        b = train.train_lgbm(X_fit, pd.Series(y_fit), cfg["models"]["lgbm"], cfg["seed"],
+                             cfg.get("n_jobs", 1))
+        return train.score(b, X_chk)
+    return fit_score
+
+
+def run(target: str = "test", sample: bool = False, modules: list[str] | None = None,
+        repeats: int | None = None, do_cv: bool = True, out: Path = PREDICTIONS_PATH) -> dict:
     cfg = load_params()
     seed, n_jobs = cfg["seed"], cfg.get("n_jobs", 1)
-    tx, accounts = load_raw(cfg, sample=sample, data_dir=data_dir)
-    mode = detect_mode(tx) if mode == "auto" else mode
-    log.info("Mode: %s", mode)
+    tr_tx, tr_legs = load_split(split_dir(cfg, "train", sample))
+    tg_tx, tg_legs = load_split(split_dir(cfg, target, sample))
+    mode = detect_mode(tr_tx)
+    log.info("Mode: %s, target split: %s", mode, target)
 
-    X = build_features(tx, accounts, cfg, skip={"graph"} if skip_graph else set())
-    FEATURES_PATH.parent.mkdir(parents=True, exist_ok=True)
-    X.to_parquet(FEATURES_PATH)
+    X_tr = build_features(tr_tx, tr_legs, cfg, modules)
+    X_tg = build_features(tg_tx, tg_legs, cfg, modules)
+    missing = [c for c in X_tr.columns if c not in X_tg.columns]
+    if missing:
+        log.warning("Target split lacks %d train features (filled NaN): %s", len(missing), missing)
+    X_tg = X_tg.reindex(columns=X_tr.columns)
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    X_tr.to_parquet(PROCESSED_DIR / "features_train.parquet")
+    X_tg.to_parquet(PROCESSED_DIR / f"features_{target}.parquet")
 
-    is_train = (tx["split"] == "train").to_numpy()
-    is_test = (tx["split"] == "test").to_numpy()
-    X_train, X_test = X[is_train], X[is_test]
-
-    train.save(train.train_iforest(X, seed, cfg["models"]["iforest"], n_jobs), "iforest")
+    train.save(train.train_iforest(X_tr, seed, cfg["models"]["iforest"], n_jobs), "iforest")
 
     report = {}
-    has_labels = "label" in tx and tx.loc[is_train, "label"].notna().any()
-    if has_labels:
-        lab = tx.loc[is_train, "label"].notna().to_numpy()
-        y = tx.loc[is_train, "label"][lab].astype(int).reset_index(drop=True)
-        Xl = X_train[lab]
-        comp = {"iforest": train.score(train.load("iforest"), Xl)}
-        if "rule_score" in Xl:
-            comp["rules"] = Xl["rule_score"].fillna(0).to_numpy()
+    if "label" in tr_tx and do_cv:
+        y = tr_tx["label"].astype(int).to_numpy()
+        comp = {"iforest": train.score(train.load("iforest"), X_tr)}
+        if "rule_score" in X_tr:
+            comp["rules"] = X_tr["rule_score"].fillna(0).to_numpy()
         if mode == "supervised":
-            comp["lgbm"], _ = cv.oof_lgbm(Xl, y, cfg)
-            lab_idx = np.flatnonzero(is_train)[lab]
-            train.save(train.train_lgbm(X.iloc[lab_idx], y, cfg["models"]["lgbm"], seed,
-                                        n_jobs), "lgbm")
-        comp["ensemble"] = ensemble.rank_average(comp, cfg["ensemble"][mode])
-        report = {k: cv.metrics(y, s) for k, s in comp.items()}
+            res = cv.repeated_cv(X_tr, y, tr_tx, cfg, _lgbm_fit_score(cfg), repeats)
+            comp["lgbm"] = res["oof"]
+            report["lgbm"] = res["summary"]
+        for name in ["iforest", "rules"]:
+            if name in comp:
+                report[name] = cv.evaluate(y, comp[name], tr_tx, cfg)
+        report["ensemble"] = cv.evaluate(y, ensemble.rank_average(comp, cfg["ensemble"][mode]),
+                                         tr_tx, cfg)
+    if mode == "supervised":
+        train.save(train.train_lgbm(X_tr, tr_tx["label"].astype(int), cfg["models"]["lgbm"],
+                                    seed, n_jobs), "lgbm")
 
-    sub = predict.predict(X_test, cfg, mode, out_path=out)
-    meta = {"mode": mode, "sample": sample, "data_dir": str(data_dir or ""),
-            "n_test": len(sub), "n_features": X.shape[1], "cv": report,
-            "primary_metric": cfg["cv"]["metric"]}
+    sub = predict.predict(X_tg, cfg, mode, out_path=out)
+    meta = {"mode": mode, "sample": sample, "target": target, "n_rows": len(sub),
+            "n_features": X_tr.shape[1], "modules": modules or list(MODULES), "cv": report}
     (out.parent / "run_meta.json").write_text(json.dumps(meta, indent=2, sort_keys=True))
 
-    log.info("Wrote %d predictions to %s", len(sub), out)
-    for name, m in report.items():
-        log.info("CV %-9s roc_auc=%.4f  average_precision=%.4f", name, m["roc_auc"],
-                 m["average_precision"])
-    if "ensemble" in report:
-        print(f"CV {cfg['cv']['metric']} (ensemble, train): "
-              f"{report['ensemble'][cfg['cv']['metric']]:.4f}")
+    log.info("Wrote %d predictions for %s to %s", len(sub), target, out)
+    if report:
+        print("\nGrouped CV on train (AP x100; per-difficulty = those positives vs all negatives)")
+        for name, s in report.items():
+            print("  " + cv.format_summary(name, s))
     return meta
 
 
 def main(argv=None) -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--mode", default="auto", choices=["auto", "supervised", "unsupervised"])
+    p.add_argument("--target", default="test", choices=["test", "validation"])
     p.add_argument("--sample", action="store_true", help="use data/sample instead of data/raw")
-    p.add_argument("--skip-graph", action="store_true")
-    p.add_argument("--data-dir", type=Path, default=None)
+    p.add_argument("--only", default=None, help="comma-separated feature modules to use")
+    p.add_argument("--skip", default="", help="comma-separated feature modules to skip")
+    p.add_argument("--repeats", type=int, default=None, help="CV repeats (default params.yaml)")
+    p.add_argument("--no-cv", action="store_true")
     p.add_argument("--out", type=Path, default=PREDICTIONS_PATH)
     a = p.parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    run(a.mode, a.sample, a.skip_graph, a.data_dir, a.out)
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    modules = a.only.split(",") if a.only else list(MODULES)
+    modules = [m for m in modules if m not in set(filter(None, a.skip.split(",")))]
+    unknown = set(modules) - set(MODULES)
+    if unknown:
+        p.error(f"unknown feature modules {sorted(unknown)}; choose from {list(MODULES)}")
+    run(a.target, a.sample, modules, a.repeats, not a.no_cv, a.out)
 
 
 if __name__ == "__main__":

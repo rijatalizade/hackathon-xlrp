@@ -9,9 +9,9 @@ sys.path.insert(0, str(ROOT))
 
 @pytest.fixture(scope="session", autouse=True)
 def sample_data():
-    """Ensure data/sample exists (it is generated, not organiser data)."""
+    """Ensure data/sample/{train,test} exist (generated, not organiser data)."""
     from src.config import SAMPLE_DIR
-    if not (SAMPLE_DIR / "transactions.csv").exists():
+    if not (SAMPLE_DIR / "train" / "transactions.parquet").exists():
         sys.path.insert(0, str(ROOT / "scripts"))
         import make_sample_data
         make_sample_data.main()

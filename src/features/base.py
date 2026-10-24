@@ -2,10 +2,12 @@
 
 Every module in src/features exposes:
 
-    def build(tx: pd.DataFrame, accounts: pd.DataFrame | None, cfg: dict) -> pd.DataFrame
+    def build(tx: pd.DataFrame, legs: pd.DataFrame, cfg: dict) -> pd.DataFrame
 
-returning a DataFrame indexed by tx_id (one row per tx in `tx`), all columns prefixed
-with the module prefix, and no all-NaN columns. `tx` never contains `label`.
+`tx` and `legs` follow ARCHITECTURE.md §2 and hold ONE split; `tx` never contains
+`label` or `meta_*`. Return a DataFrame indexed by tx_id (one row per tx in `tx`), all
+columns prefixed with the module prefix, no all-NaN columns. Never use wallet
+addresses, hashes or calendar dates as feature values.
 Finish every build() with `return validate(df, PREFIX)`.
 """
 from __future__ import annotations
@@ -18,7 +20,7 @@ import pandas as pd
 log = logging.getLogger(__name__)
 
 
-def build(tx: pd.DataFrame, accounts: pd.DataFrame | None, cfg: dict) -> pd.DataFrame:
+def build(tx: pd.DataFrame, legs: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     """The contract every feature module implements (see module docstring)."""
     raise NotImplementedError
 
@@ -42,11 +44,6 @@ def validate(df: pd.DataFrame, prefix: str) -> pd.DataFrame:
         log.warning("%s: dropping all-NaN columns %s", prefix, empty)
         df = df.drop(columns=empty)
     return df
-
-
-def to_seconds(ts: pd.Series) -> np.ndarray:
-    """UTC datetime Series -> int64 unix seconds."""
-    return ts.dt.as_unit("s").astype("int64").to_numpy()
 
 
 def rolling_count(groups, secs, window_secs: int) -> np.ndarray:

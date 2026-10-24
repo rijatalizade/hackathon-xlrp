@@ -1,12 +1,14 @@
-"""Generate a tiny SYNTHETIC dataset so the pipeline runs without organiser data.
+"""Generate tiny SYNTHETIC split folders in the organiser format, for tests only.
 
-THIS IS NOT THE ORGANISER DATA. It only exists for smoke tests and development.
-~5,000 txs, ~400 accounts, 48h window, with planted typologies (label=1):
-structuring sender, two pass-through mules, a 4-hop layering chain, a 3-cycle.
-Writes data/sample/transactions.csv with `label` (train rows only) and `split`.
+THIS IS NOT THE ORGANISER DATA. Writes data/sample/{train,test}/ with
+transactions.parquet, transfers.parquet, market_rates.csv (+ labels.csv for train),
+using only the columns src/data/load.py reads. Planted suspicious scenarios (each with
+its own scenario_id): structuring, pass-through mules, 4-hop chains, 3-cycles.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import sys
 from pathlib import Path
 
@@ -15,93 +17,111 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.config import SAMPLE_DIR, SEED  # noqa: E402
+from src.data.load import XRP_TOKEN  # noqa: E402
 
-N_ACCOUNTS = 400
-N_NORMAL = 4800
-WINDOW_SECS = 48 * 3600
-T0 = pd.Timestamp("2026-10-01T00:00:00Z")
-CURRENCIES = ["XRP", "USD", "EUR", "BTC"]
-TX_TYPES = ["Payment", "OfferCreate", "TrustSet"]
+WEEK = 7 * 86400
+PRICES = {"XRP": 0.65, "USD": 1.0, "EUR": 1.1}
 
 
-def _accounts(rng: np.random.Generator, n: int) -> list[str]:
+def _addr(rng, n):
     alphabet = list("rpshnaf39wBUDNEGHJKLM4PQRST7VWXYZ2bcdeCg65jkm8oFqi1tuvAxyz")
     return ["r" + "".join(rng.choice(alphabet, 24)) for _ in range(n)]
 
 
-def make(seed: int = SEED) -> pd.DataFrame:
+def make_split(seed: int, t0: int, n_accounts: int = 300, n_normal: int = 2500):
     rng = np.random.default_rng(seed)
-    accts = _accounts(rng, N_ACCOUNTS)
-    rows = []
+    accts = _addr(rng, n_accounts)
+    issuer, provider = _addr(rng, 2)
+    rows = []  # (t, sender, receiver, usd, currency, label, scenario)
 
-    def add(t, s, r, amt, label, cur="XRP", typ="Payment"):
-        rows.append((float(t), s, r, round(float(amt), 2), cur, typ, label))
+    def add(t, s, r, usd, label=0, scen=None, cur=None):
+        cur = cur or rng.choice(["XRP", "USD", "EUR"], p=[0.6, 0.25, 0.15])
+        rows.append((int(t0 + t), s, r, float(usd), cur, label, scen))
 
-    # Normal background traffic.
-    for _ in range(N_NORMAL):
-        s, r = rng.choice(N_ACCOUNTS, 2, replace=False)
-        cur = rng.choice(CURRENCIES, p=[0.8, 0.1, 0.07, 0.03])
-        typ = rng.choice(TX_TYPES, p=[0.85, 0.12, 0.03])
-        amt = rng.lognormal(5.5, 1.5)
-        if rng.random() < 0.05:
-            amt = round(amt, -2)
-        add(rng.uniform(0, WINDOW_SECS), accts[s], accts[r], amt, 0, cur, typ)
+    for _ in range(n_normal):
+        s, r = rng.choice(n_accounts, 2, replace=False)
+        add(rng.uniform(0, WEEK), accts[s], accts[r], rng.lognormal(4, 1.2))
 
-    pool = iter(rng.permutation(N_ACCOUNTS))
-    pick = lambda: accts[next(pool)]  # noqa: E731 — unique accounts per typology
-
-    # Structuring: one sender, many just-below-10k payments within a few hours.
-    smurf, t = pick(), rng.uniform(0, WINDOW_SECS - 6 * 3600)
-    for _ in range(20):
-        add(t + rng.uniform(0, 6 * 3600), smurf, accts[rng.integers(N_ACCOUNTS)],
-            rng.uniform(8600, 9990), 1)
-
-    # Pass-through mules: receive, then forward ~90-95% within minutes.
-    for _ in range(2):
-        mule, dest = pick(), pick()
+    pool = iter(rng.permutation(n_accounts))
+    pick = lambda: accts[next(pool)]  # noqa: E731
+    sid = iter(range(10_000))
+    for _ in range(3):  # structuring
+        s, t, k = pick(), rng.uniform(0, WEEK - 8 * 3600), f"S{next(sid)}"
         for _ in range(8):
-            t, amt = rng.uniform(0, WINDOW_SECS - 3600), rng.uniform(2000, 20000)
-            add(t, accts[rng.integers(N_ACCOUNTS)], mule, amt, 1)
-            add(t + rng.uniform(60, 900), mule, dest, amt * rng.uniform(0.9, 0.95), 1)
-
-    # Layering chain: 4 hops of the same-ish amount within minutes; repeated.
-    chain = [pick() for _ in range(5)]
-    for _ in range(4):
-        t, amt = rng.uniform(0, WINDOW_SECS - 3600), rng.uniform(5000, 50000)
+            add(t + rng.uniform(0, 8 * 3600), s, accts[rng.integers(n_accounts)],
+                rng.uniform(860, 995), 1, k)
+    for _ in range(4):  # mules
+        mule, dest, k = pick(), pick(), f"S{next(sid)}"
+        for _ in range(4):
+            t, v = rng.uniform(0, WEEK - 3600), rng.uniform(200, 2000)
+            add(t, accts[rng.integers(n_accounts)], mule, v, 1, k)
+            add(t + rng.uniform(60, 900), mule, dest, v * rng.uniform(0.9, 0.95), 1, k)
+    for _ in range(5):  # 4-hop chains
+        chain, k = [pick() for _ in range(5)], f"S{next(sid)}"
+        t, v = rng.uniform(0, WEEK - 3600), rng.uniform(500, 3000)
         for a, b in zip(chain, chain[1:]):
             t += rng.uniform(60, 600)
-            amt *= rng.uniform(0.98, 1.0)
-            add(t, a, b, amt, 1)
-
-    # Round-trip 3-cycle: A -> B -> C -> A, with a currency hop; repeated.
-    cyc = [pick() for _ in range(3)]
-    for _ in range(4):
-        t, amt = rng.uniform(0, WINDOW_SECS - 3600), rng.uniform(3000, 30000)
-        for (a, b), cur in zip(zip(cyc, cyc[1:] + cyc[:1]), ["XRP", "USD", "XRP"]):
+            v *= rng.uniform(0.98, 1.0)
+            add(t, a, b, v, 1, k)
+    for _ in range(5):  # 3-cycles
+        cyc, k = [pick() for _ in range(3)], f"S{next(sid)}"
+        t, v = rng.uniform(0, WEEK - 3600), rng.uniform(300, 3000)
+        for a, b in zip(cyc, cyc[1:] + cyc[:1]):
             t += rng.uniform(120, 900)
-            add(t, a, b, amt, 1, cur, "Payment")
+            add(t, a, b, v, 1, k)
 
-    df = pd.DataFrame(rows, columns=["t", "sender", "receiver", "amount", "currency",
-                                     "tx_type", "label"])
-    df = df.sort_values("t", kind="mergesort").reset_index(drop=True)
-    df["timestamp"] = (T0 + pd.to_timedelta(df["t"], unit="s")).dt.strftime(
-        "%Y-%m-%dT%H:%M:%SZ")
-    df["tx_id"] = [f"tx{i:06d}" for i in rng.permutation(len(df))]
-    df["fee"] = np.round(rng.uniform(0.00001, 0.0002, len(df)), 6)
-    df["split"] = np.where(rng.random(len(df)) < 0.7, "train", "test")
-    df["label"] = df["label"].where(df["split"] == "train")  # test labels hidden
-    cols = ["tx_id", "timestamp", "sender", "receiver", "amount", "currency", "tx_type",
-            "fee", "label", "split"]
-    return df[cols]
+    df = pd.DataFrame(rows, columns=["ts", "sender", "receiver", "usd", "cur", "label", "scen"])
+    df = df.sort_values("ts", kind="mergesort").reset_index(drop=True)
+    df["hash"] = [hashlib.sha256(f"{seed}-{i}".encode()).hexdigest().upper() for i in range(len(df))]
+
+    def asset(cur):
+        return (XRP_TOKEN, "XRP", "XRP") if cur == "XRP" else (issuer, cur, f"{issuer}:{cur}")
+
+    txs, legs = [], []
+    for r in df.itertuples(index=False):
+        tok, sym, _ = asset(r.cur)
+        units = r.usd / PRICES[r.cur]
+        delivered = (json.dumps(str(int(units * 1e6))) if r.cur == "XRP" else
+                     json.dumps({"currency": r.cur, "issuer": issuer, "value": f"{units:.6f}"}))
+        txs.append({"TRANSACTION_HASH": r.hash, "TIMESTAMP": r.ts, "ACCOUNT": r.sender,
+                    "FEE": 0.00001, "DELIVERED_AMOUNT": delivered,
+                    "EXTRA_TRANSACTION_FIELDS": json.dumps({"Destination": r.receiver})})
+        if rng.random() < 0.3:  # conversion via the provider: pay XRP, deliver currency
+            src = "USD" if r.cur == "XRP" else "XRP"
+            stok, ssym, _ = asset(src)
+            legs.append((r.hash, 0, "path_payment", r.sender, provider, stok, ssym,
+                         r.usd * 1.01 / PRICES[src], r.ts))
+            legs.append((r.hash, 1, "path_payment", provider, r.receiver, tok, sym, units, r.ts))
+        else:
+            legs.append((r.hash, 0, "direct_payment", r.sender, r.receiver, tok, sym, units, r.ts))
+
+    transfers = pd.DataFrame(legs, columns=["TRANSACTION_HASH", "TRANSFER_INDEX", "TRANSFER_TYPE",
+                                            "FROM_ADDRESS", "TO_ADDRESS", "TOKEN_ADDRESS",
+                                            "SYMBOL", "VALUE", "TIMESTAMP"])
+    hours = range(t0 // 3600 * 3600, t0 + WEEK + 3600, 3600)
+    rates = pd.DataFrame([(h, "XRP" if c == "XRP" else f"{issuer}:{c}", int(p * 1e6))
+                          for h in hours for c, p in PRICES.items()],
+                         columns=["TIMESTAMP", "ASSET", "PRICE_MICRO_USD"])
+    labels = pd.DataFrame({"TRANSACTION_HASH": df["hash"], "is_suspicious": df["label"],
+                           "family": np.where(df["label"] == 1, "planted", "background"),
+                           "difficulty": np.where(df["label"] == 1, "easy", "normal"),
+                           "scenario_id": df["scen"], "cohort_id": np.nan})
+    return pd.DataFrame(txs), transfers, rates, labels
 
 
 def main() -> None:
-    SAMPLE_DIR.mkdir(parents=True, exist_ok=True)
-    df = make()
-    out = SAMPLE_DIR / "transactions.csv"
-    df.to_csv(out, index=False)
-    print(f"Wrote {len(df)} SYNTHETIC sample txs ({int(df['label'].sum())} positive in train) "
-          f"to {out}")
+    for name, seed, t0, n_acc, n_norm in [("train", SEED, 1_788_220_800, 300, 2500),
+                                          ("test", SEED + 1, 1_789_862_400, 250, 2000)]:
+        d = SAMPLE_DIR / name
+        d.mkdir(parents=True, exist_ok=True)
+        txs, transfers, rates, labels = make_split(seed, t0, n_acc, n_norm)
+        txs.to_parquet(d / "transactions.parquet", index=False)
+        transfers.to_parquet(d / "transfers.parquet", index=False)
+        rates.to_csv(d / "market_rates.csv", index=False)
+        if name == "train":
+            labels.to_csv(d / "labels.csv", index=False)
+        print(f"Wrote SYNTHETIC sample {d}: {len(txs)} txs, {int(labels.is_suspicious.sum())} "
+              f"planted suspicious")
 
 
 if __name__ == "__main__":
