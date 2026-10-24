@@ -1,4 +1,4 @@
-# [Team name] — Decode & Detect: XRPL suspicion scoring
+# Turac — Decode & Detect: XRPL suspicion scoring
 
 ## 1. What this is
 
