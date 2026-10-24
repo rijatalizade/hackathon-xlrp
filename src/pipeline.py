@@ -63,9 +63,12 @@ def run(target: str = "test", sample: bool = False, modules: list[str] | None = 
     log.info("Mode: %s, target split: %s", mode, target)
 
     modules = modules or ALL_MODULES
+    if not cfg["features"]["links"].get("enabled", True):
+        modules = [m for m in modules if m != "links"]
     X_tr = build_features(tr_tx, tr_legs, cfg, modules)
     X_tg = build_features(tg_tx, tg_legs, cfg, modules)
-    if "links" in modules and "meta_scenario_id" in tr_tx:
+    if ("links" in modules and cfg["features"]["links"].get("enabled", True)
+            and "meta_scenario_id" in tr_tx):
         t = time.time()
         link_model, L_tr = links.fit(tr_tx, cfg)  # train rows: out-of-fold link probabilities
         L_tg = links.transform(link_model, feature_view(tg_tx), cfg)

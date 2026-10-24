@@ -34,6 +34,7 @@ features:
     chain_tol: 0.25          # ... of similar value (within 25%)
     cycle_max_hops: 6
   links:                     # learned scenario links (src/model/links.py)
+    enabled: false           # LB: v1 57.3 = v2 (robust links) 57.3 > v3 (full links) 56.4 -> CV gain did not transfer
     window_secs: 14400       # candidate pairs at most 4h apart
     thresholds: [0.5, 0.6, 0.7, 0.8]  # link-probability cut-offs for components (0.3 percolates)
     prob_features: true      # raw link probabilities as features (CV +0.7; KS ~0.1 vs test, LB-tested as v3)

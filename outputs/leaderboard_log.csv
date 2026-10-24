@@ -1,2 +1,4 @@
 timestamp,commit,submission_name,cv_score,lb_score,notes
 2026-10-24T11:00:05+00:00,d13e6d0,v1-features-v2,50.1,57.3,"top1% P=0.90 R=0.29 (CV P=0.81 R=0.26); lgbm, starter+tx+account+flow+motif+graph+rules"
+2026-10-24T11:47:59+00:00,c877469,v2-links-robust,54.2,57.3,commit 2bf66e2; top1% P=0.90 R=0.29; identical LB to v1
+2026-10-24T11:47:59+00:00,c877469-dirty,v3-links-full,54.9,56.4,commit c877469; learned links do not transfer to test
