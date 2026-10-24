@@ -1,0 +1,30 @@
+# --- Data never goes in git (T&Cs §4.3) ---
+data/*
+!data/raw/
+data/raw/*
+!data/raw/.gitkeep
+!data/processed/
+data/processed/*
+!data/processed/.gitkeep
+outputs/*
+!outputs/.gitkeep
+*.parquet
+*.csv
+*.pkl
+*.joblib
+# exceptions: our own synthetic sample + the leaderboard log
+!data/sample/
+!data/sample/**
+!outputs/leaderboard_log.csv
+
+# --- Secrets ---
+.env
+.env.*
+
+# --- Python / tooling ---
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+.DS_Store

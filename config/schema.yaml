@@ -1,0 +1,30 @@
+# Organiser column -> canonical column mapping.
+# TODO(P1): fill in at the 10:30 briefing. Keys are CANONICAL names (do not change),
+# values are the organiser's column names. Placeholder values == canonical names,
+# which is what scripts/make_sample_data.py writes. Set a value to null if absent.
+columns:
+  tx_id: tx_id
+  timestamp: timestamp
+  sender: sender
+  receiver: receiver
+  amount: amount
+  currency: currency
+  tx_type: tx_type
+  fee: fee
+  dest_tag: dest_tag
+  memo: memo
+  label: label
+  split: split
+
+# Unit of a numeric timestamp column: s | ms | ripple (seconds since 2000-01-01, XRPL epoch).
+timestamp_unit: s
+
+# If organisers ship separate files instead of a `split` column, files whose name
+# contains these substrings are assigned that split.
+file_split:
+  train: train
+  test: test
+
+# Files whose name contains these substrings are treated specially.
+accounts_file_contains: account   # optional account metadata table
+labels_file_contains: label       # optional separate (tx_id, label) table, merged on tx_id

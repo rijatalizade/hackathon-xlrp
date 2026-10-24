@@ -1,0 +1,69 @@
+# All tunable knobs live here. Nothing in src/ should hard-code thresholds.
+
+submission:
+  id_col: tx_id              # TODO(P1): confirm at briefing
+  score_col: suspicion_score # TODO(P1): confirm at briefing
+  float_format: "%.8f"
+
+cv:
+  n_splits: 5
+  metric: average_precision  # roc_auc | average_precision  TODO(P1): confirm at briefing
+
+features:
+  round_levels: [100, 1000, 10000]
+  native_currency: XRP
+  conversion_tx_types: [OfferCreate, OfferCancel, AMMDeposit, AMMWithdraw, AMMSwap]
+  account_windows_secs:
+    1h: 3600
+    24h: 86400
+
+rules:
+  structuring:
+    threshold: 10000         # reporting threshold T
+    margin: 0.15             # "just below" = [T*(1-margin), T)
+    min_count: 4             # N txs
+    window_secs: 86400       # W
+  passthrough:
+    forward_ratio: 0.8       # receiver forwards >= 80% of the amount ...
+    window_secs: 3600        # ... within W
+  round_amount:
+    level: 1000
+  velocity_burst:
+    short_secs: 3600
+    long_secs: 86400
+    min_count: 5             # >= 5 txs in the short window
+    rate_ratio: 4.0          # short-window rate >= 4x long-window rate
+  weights:                   # rule_score = weighted mean of the flags
+    rule_structuring: 1.0
+    rule_passthrough: 1.0
+    rule_round_amount: 0.25
+    rule_velocity_burst: 0.5
+
+models:
+  lgbm:
+    n_estimators: 300
+    learning_rate: 0.05
+    num_leaves: 31
+    min_child_samples: 10
+    subsample: 0.8
+    subsample_freq: 1
+    colsample_bytree: 0.8
+    reg_lambda: 1.0
+    deterministic: true
+    force_row_wise: true
+    verbose: -1
+  iforest:
+    n_estimators: 300
+    max_samples: auto
+    contamination: auto
+
+ensemble:
+  supervised:
+    lgbm: 0.7
+    iforest: 0.1
+    rules: 0.2
+  unsupervised:
+    iforest: 0.5
+    rules: 0.5
+
+n_jobs: 1                    # keep 1 for the final, reproducible run
