@@ -48,10 +48,18 @@ def _lgbm_classifier(params: dict, seed: int, n_jobs: int):
 
 
 def train_lgbm(X: pd.DataFrame, y: pd.Series, params: dict, seed: int, n_jobs: int = 1) -> dict:
-    """Fit a gradient-boosted classifier; returns a model bundle (not saved)."""
-    model = _lgbm_classifier(params, seed, n_jobs)
-    model.fit(X, y.astype(int))
-    return {"kind": "lgbm", "model": model, "columns": list(X.columns), "fill": None}
+    """Fit a gradient-boosted classifier; returns a model bundle (not saved).
+    params["bag_seeds"] > 1 fits that many models with seeds seed, seed+1, ... and the
+    bundle scores by averaging their probabilities (lower variance, same features)."""
+    params = dict(params)
+    bags = int(params.pop("bag_seeds", 1))
+    models = []
+    for i in range(bags):
+        model = _lgbm_classifier(params, seed + i, n_jobs)
+        model.fit(X, y.astype(int))
+        models.append(model)
+    return {"kind": "lgbm", "model": models[0], "models": models, "columns": list(X.columns),
+            "fill": None}
 
 
 def train_iforest(X: pd.DataFrame, seed: int, params: dict | None = None, n_jobs: int = 1) -> dict:
@@ -67,7 +75,8 @@ def score(bundle: dict, X: pd.DataFrame) -> np.ndarray:
     X = X.reindex(columns=bundle["columns"])
     if bundle["kind"] == "iforest":
         return -bundle["model"].score_samples(X.fillna(bundle["fill"]))
-    return bundle["model"].predict_proba(X)[:, 1]
+    models = bundle.get("models", [bundle["model"]])
+    return np.mean([m.predict_proba(X)[:, 1] for m in models], axis=0)
 
 
 def save(bundle: dict, name: str, run_dir: Path = OUTPUTS_DIR) -> None:

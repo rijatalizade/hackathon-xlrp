@@ -54,6 +54,17 @@ reconstruction, which fixed time rules can't do because busy wallets merge into 
 component. The link model learns which nearby pairs (continuation, same sender, same
 receiver) belong to one scenario (OOF pair AUC 0.93); train rows get out-of-fold link
 probabilities so no tx is linked by a model that saw its own scenario.
+| — | **Leaderboard v2** (robust links): 57.3, P 0.90 R 0.29 — identical to v1 | CV 54.2 | | links gained nothing on test |
+| — | **Leaderboard v3** (full links): **56.4** | CV 54.9 | | **CV gain did not transfer** → links disabled |
+| 16 | `shapes`: training-deck signals (depositors, exit≈sum of deposits, recipients, hub imbalance, hub overlap, two-hop routes) | 52.0 | +1.73 ± 0.45 vs 9, 14/15 | keep |
+| 17 | shapes without payout-similarity (KS 0.15 vs test) | 51.7 | −0.3 (noise) vs 16 | keep: no drift |
+| 18 | 5-seed bagging of LightGBM | 52.2 | +0.49 ± 0.15 vs 17, 13/15 | keep → **v4** |
+
+Lesson from v2/v3: our CV groups by scenario, but all train scenarios share one generator
+style; the test split has "batch variations absent from training". A model that LEARNS
+train's scenario layout (the link model) gains in CV and nothing on test, while hand-built
+behavioural features (v1, shapes) transfer. Selection rule from here: hand-built features,
+paired CV gain, zero drift (KS < 0.1), then at most one leaderboard run to confirm.
 
 Rows 10–11 targeted the legitimate relay txs that crowd the top 3% (ceiling analysis: removing
 the worst quarter of them would add ~5 AP). `through_frac` separates them from true positives
