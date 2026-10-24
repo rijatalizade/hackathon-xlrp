@@ -14,7 +14,6 @@ RAW_DIR = DATA_DIR / "raw"          # train/, validation/, test/ split folders
 PROCESSED_DIR = DATA_DIR / "processed"
 SAMPLE_DIR = DATA_DIR / "sample"
 OUTPUTS_DIR = ROOT / "outputs"
-MODELS_DIR = OUTPUTS_DIR / "models"
 
 PREDICTIONS_PATH = OUTPUTS_DIR / "predictions.csv"
 LEADERBOARD_LOG = OUTPUTS_DIR / "leaderboard_log.csv"

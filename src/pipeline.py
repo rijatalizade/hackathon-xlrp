@@ -1,5 +1,8 @@
 """End-to-end: load splits -> features (per split) -> grouped CV -> train -> predict.
 
+Every artifact of a run (features_*.parquet, models/, oof_train.parquet, run_meta.json)
+is written next to --out, so runs (incl. test runs on the sample) never overwrite each other.
+
     python -m src.pipeline [--target test|validation] [--sample] [--only starter,tx]
                            [--skip graph] [--repeats N] [--no-cv]
 Owner: P1.
@@ -14,7 +17,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.config import PREDICTIONS_PATH, PROCESSED_DIR, load_params
+from src.config import PREDICTIONS_PATH, load_params
 from src.data.load import detect_mode, feature_view, load_split, split_dir
 from src.features import MODULES
 from src.model import cv, ensemble, predict, train
@@ -64,16 +67,18 @@ def run(target: str = "test", sample: bool = False, modules: list[str] | None = 
     if missing:
         log.warning("Target split lacks %d train features (filled NaN): %s", len(missing), missing)
     X_tg = X_tg.reindex(columns=X_tr.columns)
-    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
-    X_tr.to_parquet(PROCESSED_DIR / "features_train.parquet")
-    X_tg.to_parquet(PROCESSED_DIR / f"features_{target}.parquet")
+    run_dir = out.parent
+    run_dir.mkdir(parents=True, exist_ok=True)
+    X_tr.to_parquet(run_dir / "features_train.parquet")
+    X_tg.to_parquet(run_dir / f"features_{target}.parquet")
 
-    train.save(train.train_iforest(X_tr, seed, cfg["models"]["iforest"], n_jobs), "iforest")
+    train.save(train.train_iforest(X_tr, seed, cfg["models"]["iforest"], n_jobs), "iforest",
+               run_dir)
 
     report = {}
     if "label" in tr_tx and do_cv:
         y = tr_tx["label"].astype(int).to_numpy()
-        comp = {"iforest": train.score(train.load("iforest"), X_tr)}
+        comp = {"iforest": train.score(train.load("iforest", run_dir), X_tr)}
         if "rule_score" in X_tr:
             comp["rules"] = X_tr["rule_score"].fillna(0).to_numpy()
         if mode == "supervised":
@@ -82,8 +87,7 @@ def run(target: str = "test", sample: bool = False, modules: list[str] | None = 
             report["lgbm"] = res["summary"]
             oof = tr_tx[["tx_id", "label"] + [c for c in tr_tx if c.startswith("meta_")]].copy()
             oof["oof"] = res["oof"]
-            out.parent.mkdir(parents=True, exist_ok=True)
-            oof.to_parquet(out.parent / "oof_train.parquet")  # for error analysis (P4)
+            oof.to_parquet(run_dir / "oof_train.parquet")  # for error analysis (P4)
         for name in ["iforest", "rules"]:
             if name in comp:
                 report[name] = cv.evaluate(y, comp[name], tr_tx, cfg)
@@ -91,12 +95,12 @@ def run(target: str = "test", sample: bool = False, modules: list[str] | None = 
                                          tr_tx, cfg)
     if mode == "supervised":
         train.save(train.train_lgbm(X_tr, tr_tx["label"].astype(int), cfg["models"]["lgbm"],
-                                    seed, n_jobs), "lgbm")
+                                    seed, n_jobs), "lgbm", run_dir)
 
     sub = predict.predict(X_tg, cfg, mode, out_path=out)
     meta = {"mode": mode, "sample": sample, "target": target, "n_rows": len(sub),
             "n_features": X_tr.shape[1], "modules": modules or list(MODULES), "cv": report}
-    (out.parent / "run_meta.json").write_text(json.dumps(meta, indent=2, sort_keys=True))
+    (run_dir / "run_meta.json").write_text(json.dumps(meta, indent=2, sort_keys=True))
 
     log.info("Wrote %d predictions for %s to %s", len(sub), target, out)
     if report:

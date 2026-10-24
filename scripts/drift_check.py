@@ -9,7 +9,7 @@ wallets, and wallets are disjoint between splits, so it always reaches AUC ~1 wi
 indicating a harmful shift.)
 
     python scripts/drift_check.py [--other validation|test] [--top 15]
-Run the pipeline for that target first: it writes data/processed/features_*.parquet.
+Run the pipeline for that target first: it writes features_*.parquet next to its --out.
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ import pandas as pd
 from scipy.stats import ks_2samp
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from src.config import PROCESSED_DIR  # noqa: E402
+from src.config import OUTPUTS_DIR  # noqa: E402
 
 WARN_KS = 0.1
 
@@ -30,9 +30,10 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--other", default="validation", choices=["validation", "test"])
     p.add_argument("--top", type=int, default=15)
+    p.add_argument("--run-dir", type=Path, default=OUTPUTS_DIR, help="folder of a pipeline run")
     a = p.parse_args()
-    A = pd.read_parquet(PROCESSED_DIR / "features_train.parquet")
-    B = pd.read_parquet(PROCESSED_DIR / f"features_{a.other}.parquet")
+    A = pd.read_parquet(a.run_dir / "features_train.parquet")
+    B = pd.read_parquet(a.run_dir / f"features_{a.other}.parquet")
     rows = []
     for c in A.columns:
         x, z = A[c].dropna(), B[c].dropna() if c in B else pd.Series(dtype=float)

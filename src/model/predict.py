@@ -10,7 +10,7 @@ from src.config import PREDICTIONS_PATH
 from src.model import ensemble, train
 
 
-def component_scores(X: pd.DataFrame, cfg: dict, mode: str) -> dict[str, np.ndarray]:
+def component_scores(X: pd.DataFrame, cfg: dict, mode: str, run_dir: Path) -> dict[str, np.ndarray]:
     """Scores of every ensemble component with a non-zero weight, from saved models."""
     scores = {}
     for name, w in cfg["ensemble"][mode].items():
@@ -20,15 +20,17 @@ def component_scores(X: pd.DataFrame, cfg: dict, mode: str) -> dict[str, np.ndar
             if "rule_score" in X:
                 scores["rules"] = X["rule_score"].fillna(0).to_numpy()
         elif name != "lgbm" or mode == "supervised":
-            scores[name] = train.score(train.load(name), X)
+            scores[name] = train.score(train.load(name, run_dir), X)
     return scores
 
 
 def predict(X_target: pd.DataFrame, cfg: dict, mode: str, out_path: Path = PREDICTIONS_PATH
             ) -> pd.DataFrame:
     """Rank-average the components, write and return the submission CSV.
-    X_target is indexed by tx_id (one row per target tx)."""
-    final = ensemble.rank_average(component_scores(X_target, cfg, mode), cfg["ensemble"][mode])
+    X_target is indexed by tx_id (one row per target tx); models are read from
+    out_path's folder (the run dir)."""
+    final = ensemble.rank_average(component_scores(X_target, cfg, mode, out_path.parent),
+                                   cfg["ensemble"][mode])
     sub = cfg["submission"]
     df = pd.DataFrame({sub["id_col"]: X_target.index.to_numpy(), sub["score_col"]: final})
     assert df[sub["id_col"]].is_unique, "duplicate ids"
