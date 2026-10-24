@@ -44,24 +44,41 @@ scripts/submit_log.py          append leaderboard result to outputs/leaderboard_
 
 ---
 
-## 2. Data contract (fill in at 10:30 from the real schema)
+## 2. Data contract (real organiser format, confirmed 24 Oct)
 
-`config/schema.yaml` — map organiser column names to these canonical ones:
+Organiser data = one folder per split (`train/`, `validation/`, `test/`), each with
+`transactions.parquet`, `transfers.parquet` (1–3 legs per tx), `blocks.parquet` (unused),
+`market_rates.csv` (hourly USD prices); `train/` also has `labels.csv`.
+Locally they are symlinked into `data/raw/{train,validation,test}` (never committed).
+**Wallets are disjoint between splits → features are always computed within one split.**
 
-| Canonical | Meaning | Required |
+`src/data/load.py::load_split(dir)` returns `(tx, legs)`.
+
+**`tx`: one row per transaction**, sorted by `(timestamp, tx_id)`:
+
+| Column | Type | Meaning / source |
 |---|---|---|
-| `tx_id` | unique transaction id | yes |
-| `timestamp` | UTC datetime | yes |
-| `sender`, `receiver` | account ids | yes |
-| `amount` | numeric | yes |
-| `currency` | string (XRP / IOU code) | if present |
-| `tx_type` | Payment / OfferCreate / TrustSet … | if present |
-| `fee` | numeric | if present |
-| `dest_tag`, `memo` | optional | if present |
-| `label` | 0/1 suspicious (train only) | if present |
-| `split` | train / test | yes (derived if separate files) |
+| `tx_id` | str | `TRANSACTION_HASH` |
+| `timestamp` | datetime UTC | `TIMESTAMP` (unix s) |
+| `ts` | int | unix seconds (for windows) |
+| `sender` | str | `ACCOUNT` (= first leg's `FROM_ADDRESS`) |
+| `receiver` | str | `Destination` in `EXTRA_TRANSACTION_FIELDS` (= last leg's `TO_ADDRESS`) |
+| `asset_out`, `amount_out` | str, float | delivered asset (`XRP` or `issuer:CUR`) and units received |
+| `asset_in`, `amount_in` | str, float | first executed leg: what the sender actually paid |
+| `value_usd` | float | delivered value at the hourly reference price — **use this to compare amounts** |
+| `value_in_usd` | float | sender's actual cost in USD; `value_in_usd - value_usd` = conversion spread |
+| `n_legs` | int | 1 = direct, 2 = one provider, 3 = XRP bridge |
+| `is_conversion` | 0/1 | `asset_in != asset_out` |
+| `providers` | str | `;`-joined liquidity providers used (empty if direct) |
+| `fee` | float | XRP fee |
+| `label` | 0/1 | `is_suspicious`, train only — **never reaches features** |
+| `meta_family`, `meta_difficulty`, `meta_scenario_id`, `meta_cohort_id` | str | train only, for CV grouping / reporting — **never features** |
 
-Anything not in the schema stays available as `extra_*` columns.
+**`legs`: one row per transfer leg**: `tx_id, leg, from_addr, to_addr, asset, amount, value_usd, transfer_type`.
+
+Feature modules receive `tx` without `label`/`meta_*`, plus `legs`, for ONE split.
+Forbidden as features: wallet addresses, hashes, ledger/sequence numbers, calendar date
+(test is a different week), anything `meta_*`.
 
 ---
 
@@ -93,11 +110,11 @@ Anything not in the schema stays available as `extra_*` columns.
 
 **Interface contract (do not break):**
 ```python
-def build(tx: pd.DataFrame, accounts: pd.DataFrame | None, cfg: dict) -> pd.DataFrame:
+def build(tx: pd.DataFrame, legs: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     """Returns DataFrame indexed by tx_id. Columns prefixed e.g. 'graph_'. No NaN-only columns."""
 ```
 
-**Branching:** `main` protected-ish; each person on `feat/<name>`; P1 merges. Small commits, merge every ~45 min. P4 owns `features.parquet` regeneration after each merge.
+**Branching:** `develop` is the default branch; each person on `feat/<name>`; P1 merges. Small commits, merge every ~45 min. P4 owns `features.parquet` regeneration after each merge.
 
 ---
 
