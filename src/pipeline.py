@@ -80,6 +80,10 @@ def run(target: str = "test", sample: bool = False, modules: list[str] | None = 
             res = cv.repeated_cv(X_tr, y, tr_tx, cfg, _lgbm_fit_score(cfg), repeats)
             comp["lgbm"] = res["oof"]
             report["lgbm"] = res["summary"]
+            oof = tr_tx[["tx_id", "label"] + [c for c in tr_tx if c.startswith("meta_")]].copy()
+            oof["oof"] = res["oof"]
+            out.parent.mkdir(parents=True, exist_ok=True)
+            oof.to_parquet(out.parent / "oof_train.parquet")  # for error analysis (P4)
         for name in ["iforest", "rules"]:
             if name in comp:
                 report[name] = cv.evaluate(y, comp[name], tr_tx, cfg)

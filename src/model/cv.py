@@ -95,6 +95,7 @@ def repeated_cv(X: pd.DataFrame, y: np.ndarray, tx: pd.DataFrame, cfg: dict,
     summary["ap_fold_std"] = float(np.std(folds))
     summary["ap_fold_min"], summary["ap_fold_max"] = float(np.min(folds)), float(np.max(folds))
     summary["repeats"] = repeats
+    summary["fold_aps"] = [round(a, 4) for a in folds]
     return {"oof": first_oof, "summary": summary}
 
 
