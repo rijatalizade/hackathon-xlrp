@@ -27,8 +27,8 @@ zip:           ## code ZIP for upload (tracked files only: no data, no venv)
 	@ls -lh outputs/code.zip
 
 clean:
-	rm -rf outputs/models outputs/predictions.csv outputs/run_meta.json outputs/validation \
-	       data/processed/*.parquet .pytest_cache
+	rm -rf outputs/models outputs/predictions.csv outputs/run_meta.json outputs/*.parquet \
+	       outputs/validation outputs/runs data/processed/*.parquet .pytest_cache
 	find . -name __pycache__ -type d -prune -exec rm -rf {} +
 
 submit-check:

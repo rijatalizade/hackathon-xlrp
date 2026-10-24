@@ -1,19 +1,20 @@
 """Model training. Owner: P4.
 
-Each trained model is saved as a bundle {"model", "columns", "fill", "kind"} so
-predict.py can score new rows with exactly the same feature layout.
+Each trained model is saved as a bundle {"model", "columns", "fill", "kind"} in
+<run dir>/models/ so predict.py can score new rows with exactly the same feature layout.
 """
 from __future__ import annotations
 
 import functools
 import logging
+from pathlib import Path
 
 import joblib
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import IsolationForest
 
-from src.config import MODELS_DIR
+from src.config import OUTPUTS_DIR
 
 log = logging.getLogger(__name__)
 
@@ -69,10 +70,10 @@ def score(bundle: dict, X: pd.DataFrame) -> np.ndarray:
     return bundle["model"].predict_proba(X)[:, 1]
 
 
-def save(bundle: dict, name: str) -> None:
-    MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    joblib.dump(bundle, MODELS_DIR / f"{name}.joblib")
+def save(bundle: dict, name: str, run_dir: Path = OUTPUTS_DIR) -> None:
+    (run_dir / "models").mkdir(parents=True, exist_ok=True)
+    joblib.dump(bundle, run_dir / "models" / f"{name}.joblib")
 
 
-def load(name: str) -> dict:
-    return joblib.load(MODELS_DIR / f"{name}.joblib")
+def load(name: str, run_dir: Path = OUTPUTS_DIR) -> dict:
+    return joblib.load(run_dir / "models" / f"{name}.joblib")
