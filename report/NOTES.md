@@ -43,6 +43,17 @@ previous row on identical folds; we keep a change only if gain > 2 × SE.
 | — | **Leaderboard v1** (commit d13e6d0): 57.3, top-1% P 0.90 R 0.29 | CV 50.1 | LB inside CV fold range (41–60) | no overfit sign |
 | 10 | Burst shape: share of wallets that pass money through, hub share | 50.4 | −0.04 ± 0.59 (noise) | reject |
 | 11 | Wallet repetition (# bursts a wallet joins per week) | — | no univariate signal (all ~22) | not built |
+| 12 | Raw-field scan (sequence, ledger index, flags, SendMax/Paths, fees) | — | all AUC ≈ 0.5: no generator artifacts | not used |
+| 13 | **Learned scenario links** (`src/model/links.py`), 4h pairs, thresholds .5–.8 + raw link probabilities | 54.9 | +5.13 ± 0.65, 14/15 | superseded by 14 |
+| 14 | Links, robust: thresholds .6–.8 only, no raw link probabilities (those drifted on test, KS 0.10–0.12) | **54.2** | −1.12 ± 0.37 vs 13; +4.0 vs 9 | **keep**: no drift |
+| 15 | Links with a 12h window | 53.6 | +3.56 ± 0.57 vs 9 (worse than 4h) | reject |
+
+Scenario-level EDA behind rows 13–14: easy motifs take ~5 min vs ~1h for decoys (AUC 0.91);
+medium motifs are *slower* than decoys (~1.8h, longer holds), so they need hour-scale
+reconstruction, which fixed time rules can't do because busy wallets merge into one
+component. The link model learns which nearby pairs (continuation, same sender, same
+receiver) belong to one scenario (OOF pair AUC 0.93); train rows get out-of-fold link
+probabilities so no tx is linked by a model that saw its own scenario.
 
 Rows 10–11 targeted the legitimate relay txs that crowd the top 3% (ceiling analysis: removing
 the worst quarter of them would add ~5 AP). `through_frac` separates them from true positives

@@ -20,9 +20,10 @@ import pandas as pd
 from src.config import PREDICTIONS_PATH, load_params
 from src.data.load import detect_mode, feature_view, load_split, split_dir
 from src.features import MODULES
-from src.model import cv, ensemble, predict, train
+from src.model import cv, ensemble, links, predict, train
 
 log = logging.getLogger("pipeline")
+ALL_MODULES = list(MODULES) + ["links"]  # "links" = learned scenario links (src/model/links.py)
 
 
 def build_features(tx: pd.DataFrame, legs: pd.DataFrame, cfg: dict,
@@ -31,7 +32,7 @@ def build_features(tx: pd.DataFrame, legs: pd.DataFrame, cfg: dict,
     one broken module never blocks a submission. Result is aligned to tx['tx_id']."""
     tx = feature_view(tx)  # labels / meta never reach features
     parts = []
-    for name in modules or list(MODULES):
+    for name in [m for m in (modules or list(MODULES)) if m in MODULES]:
         t = time.time()
         try:
             f = MODULES[name].build(tx, legs, cfg)
@@ -61,8 +62,16 @@ def run(target: str = "test", sample: bool = False, modules: list[str] | None = 
     mode = detect_mode(tr_tx)
     log.info("Mode: %s, target split: %s", mode, target)
 
+    modules = modules or ALL_MODULES
     X_tr = build_features(tr_tx, tr_legs, cfg, modules)
     X_tg = build_features(tg_tx, tg_legs, cfg, modules)
+    if "links" in modules and "meta_scenario_id" in tr_tx:
+        t = time.time()
+        link_model, L_tr = links.fit(tr_tx, cfg)  # train rows: out-of-fold link probabilities
+        L_tg = links.transform(link_model, feature_view(tg_tx), cfg)
+        X_tr = pd.concat([X_tr, L_tr.reindex(X_tr.index)], axis=1)
+        X_tg = pd.concat([X_tg, L_tg.reindex(X_tg.index)], axis=1)
+        log.info("features/links: %d cols in %.1fs", L_tr.shape[1], time.time() - t)
     missing = [c for c in X_tr.columns if c not in X_tg.columns]
     if missing:
         log.warning("Target split lacks %d train features (filled NaN): %s", len(missing), missing)
@@ -99,7 +108,7 @@ def run(target: str = "test", sample: bool = False, modules: list[str] | None = 
 
     sub = predict.predict(X_tg, cfg, mode, out_path=out)
     meta = {"mode": mode, "sample": sample, "target": target, "n_rows": len(sub),
-            "n_features": X_tr.shape[1], "modules": modules or list(MODULES), "cv": report}
+            "n_features": X_tr.shape[1], "modules": modules, "cv": report}
     (run_dir / "run_meta.json").write_text(json.dumps(meta, indent=2, sort_keys=True))
 
     log.info("Wrote %d predictions for %s to %s", len(sub), target, out)
@@ -122,11 +131,11 @@ def main(argv=None) -> None:
     a = p.parse_args(argv)
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    modules = a.only.split(",") if a.only else list(MODULES)
+    modules = a.only.split(",") if a.only else list(ALL_MODULES)
     modules = [m for m in modules if m not in set(filter(None, a.skip.split(",")))]
-    unknown = set(modules) - set(MODULES)
+    unknown = set(modules) - set(ALL_MODULES)
     if unknown:
-        p.error(f"unknown feature modules {sorted(unknown)}; choose from {list(MODULES)}")
+        p.error(f"unknown feature modules {sorted(unknown)}; choose from {ALL_MODULES}")
     run(a.target, a.sample, modules, a.repeats, not a.no_cv, a.out)
 
 

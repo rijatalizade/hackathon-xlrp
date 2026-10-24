@@ -33,6 +33,17 @@ features:
     chain_window_secs: 14400 # a hop is funded by a receipt at most 4h earlier ...
     chain_tol: 0.25          # ... of similar value (within 25%)
     cycle_max_hops: 6
+  links:                     # learned scenario links (src/model/links.py)
+    window_secs: 14400       # candidate pairs at most 4h apart
+    thresholds: [0.6, 0.7, 0.8]  # link-probability cut-offs (0.3 percolates; 0.5 drifts on test)
+    model:
+      n_estimators: 300
+      learning_rate: 0.05
+      num_leaves: 31
+      min_child_samples: 50
+      deterministic: true
+      force_row_wise: true
+      verbose: -1
 
 rules:
   structuring:
