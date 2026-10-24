@@ -13,6 +13,7 @@ import pandas as pd
 from src.features.base import validate
 
 PREFIX = "graph_"
+# Time-respecting chains, cycles and fan-out/in bursts live in src/features/motif.py.
 
 
 def build_graph(tx: pd.DataFrame) -> nx.DiGraph:
@@ -42,20 +43,6 @@ def node_features(G: nx.DiGraph) -> pd.DataFrame:
     }, index=pd.Index(nodes, name="acct"))
 
 
-def short_cycle_member(G: nx.DiGraph, tx: pd.DataFrame, k_min: int = 2, k_max: int = 5) -> pd.Series:
-    """TODO(P3): 1 if the tx's (sender -> receiver) edge lies on a directed cycle of
-    length k_min..k_max (round-tripping), else 0. Index = tx_id.
-    Hint: nx.simple_cycles(G, length_bound=k_max), collect edges on cycles."""
-    raise NotImplementedError
-
-
-def chain_depth_same_amount(tx: pd.DataFrame, window_min: float = 30, tol: float = 0.05) -> pd.Series:
-    """TODO(P3): length of the longest A->B->C... chain ending at this tx where each hop
-    happens within `window_min` minutes of the previous one and amount is within `tol`
-    (relative) of it (layering). Index = tx_id, value >= 1."""
-    raise NotImplementedError
-
-
 def neighbour_mean_score(G: nx.DiGraph, tx: pd.DataFrame, prior: pd.Series) -> pd.Series:
     """TODO(P3): second-pass feature. Given a prior score per tx_id (e.g. first-pass
     model OOF/test scores), return the mean prior score of txs touching the sender's and
@@ -75,7 +62,4 @@ def build(tx: pd.DataFrame, legs: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     f = pd.concat(parts, axis=1)
     f["graph_s_out_r_in_ratio"] = (f["graph_s_out_degree"]
                                    / f["graph_r_in_degree"].replace(0, np.nan))
-    # TODO(P3): wire in once implemented, e.g.
-    # f["graph_cycle_member"] = short_cycle_member(G, tx).reindex(f.index)
-    # f["graph_chain_depth"] = chain_depth_same_amount(tx).reindex(f.index)
     return validate(f, PREFIX)

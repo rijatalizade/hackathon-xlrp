@@ -22,6 +22,17 @@ features:
     1h: 3600
     24h: 86400
     72h: 259200
+  flow_horizons_secs:        # receiver forwarding / sender funding horizons
+    1h: 3600
+    6h: 21600
+    24h: 86400
+  motif:
+    windows_secs:            # continuation links up to W (value-similar beyond burst window)
+      10m: 600
+    burst_window_secs: 600   # same-wallet consecutive sends/receives closer than this link
+    chain_window_secs: 14400 # a hop is funded by a receipt at most 4h earlier ...
+    chain_tol: 0.25          # ... of similar value (within 25%)
+    cycle_max_hops: 6
 
 rules:
   structuring:
@@ -47,10 +58,10 @@ rules:
 
 models:
   lgbm:                      # regularised on purpose: small trees, subsampling
-    n_estimators: 300
+    n_estimators: 500
     learning_rate: 0.05
-    num_leaves: 15
-    min_child_samples: 40
+    num_leaves: 7
+    min_child_samples: 80
     subsample: 0.8
     subsample_freq: 1
     colsample_bytree: 0.7
